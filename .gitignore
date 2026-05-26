@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Local runtime data
+data/repos/*
+data/uploads/*
+data/state/*
+data/logs/*
+!data/repos/.gitkeep
+!data/uploads/.gitkeep
+!data/state/.gitkeep
+!data/logs/.gitkeep
+
+# Environment
+.env
+.env.local
+frontend/.env.local
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

@@ -1,0 +1,48 @@
+@import "@xyflow/react/dist/style.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #eef1ed;
+  color: #151718;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #eef1ed;
+  color: #151718;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #a9b1aa transparent;
+}
+
+.react-flow__node {
+  border-radius: 6px;
+  border: 1px solid #c8d1cc;
+  background: #ffffff;
+  color: #151718;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.react-flow__edge-path {
+  stroke: #6d4b7d;
+  stroke-width: 1.4;
+}
+
