@@ -25,10 +25,10 @@ data/logs/*
 .env
 .env.local
 frontend/.env.local
+.streamlit/secrets.toml
 
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-
