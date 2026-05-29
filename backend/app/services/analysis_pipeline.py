@@ -34,23 +34,24 @@ class AnalysisPipeline:
         self.storage.append_log(repo_id, "pipeline", "info", "Analysis started.")
 
         try:
-            files = iter_python_files(source_dir)
+            from app.services.file_utils import iter_code_files
+            files = iter_code_files(source_dir)
             stats = self._stats(source_dir, files)
             metadata.stats = stats
             if not files:
                 metadata.status = RepoStatus.failed
-                metadata.error = "No Python files found. Stage 1 only supports Python repositories."
+                metadata.error = "No supported code files found. The engine supports Python, JavaScript/TypeScript, Go, Rust, Java, and C/C++ repositories."
                 self.storage.save_repo_metadata(metadata)
                 self.storage.append_log(repo_id, "ingestion", "error", metadata.error)
                 return metadata
 
             self.storage.save_files(repo_id, files)
-            self.storage.append_log(repo_id, "ingestion", "info", f"Discovered {len(files)} Python files.")
+            self.storage.append_log(repo_id, "ingestion", "info", f"Discovered {len(files)} code files.")
 
             parsed_files = []
             warnings: list[str] = []
             for repo_file in files:
-                document = self.tree_sitter_service.parse_file(repo_id, source_dir, repo_file.path)
+                document = self.tree_sitter_service.parse_file(repo_id, source_dir, repo_file.path, repo_file.language)
                 self.storage.save_tree_sitter(repo_id, repo_file.path, document)
                 if document.parse_error:
                     repo_file.parse_status = "failed"

@@ -45,7 +45,7 @@ class RepoMetadata(BaseModel):
 
 class RepoFile(BaseModel):
     path: str
-    language: Literal["python"] = "python"
+    language: str = "python"
     size_bytes: int
     line_count: int
     parse_status: Literal["pending", "parsed", "failed"] = "pending"
@@ -71,7 +71,7 @@ class TreeNode(BaseModel):
 class TreeSitterDocument(BaseModel):
     repo_id: str
     file_path: str
-    language: Literal["python"] = "python"
+    language: str = "python"
     root: TreeNode | None = None
     source: str
     warnings: list[str] = Field(default_factory=list)

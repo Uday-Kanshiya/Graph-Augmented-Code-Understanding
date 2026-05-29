@@ -43,5 +43,7 @@ chat_service = ChatService(
     graph_retrieval_service=graph_retrieval_service,
     token_service=token_service,
     llm_provider=llm_provider,
+    pipeline=analysis_pipeline,
 )
+
 

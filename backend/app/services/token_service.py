@@ -66,17 +66,11 @@ class TokenService:
         codegraph: GraphDocument,
         graphify: GraphDocument,
     ) -> TokenSummary:
-        raw_text = "\n\n".join(read_text_lossy(repo_root / repo_file.path) for repo_file in files)
-        chunks_text = "\n\n".join(chunk.text for chunk in chunks)
         codegraph_text = json.dumps(codegraph.model_dump(mode="json"), separators=(",", ":"))
         graphify_text = json.dumps(graphify.model_dump(mode="json"), separators=(",", ":"))
-        merged = "\n".join([codegraph_text, graphify_text])
         stages = {
-            "raw_repo_text": self.measure_estimated("raw_repo_text", raw_text),
-            "chunked_basic_retrieval_context": self.measure_estimated("chunked_basic_retrieval_context", chunks_text),
             "codegraph_derived_context": self.measure_estimated("codegraph_derived_context", codegraph_text),
             "graphify_derived_context": self.measure_estimated("graphify_derived_context", graphify_text),
-            "merged_optimized_context": self.measure_estimated("merged_optimized_context", merged),
         }
         return TokenSummary(repo_id=repo_id, stages=stages)
 

@@ -1,208 +1,123 @@
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
-import sys
 from pathlib import Path
-
+from typing import Any
 from app.models.schemas import GraphDocument, GraphEdge, GraphNode
-from app.services.storage import LocalStorage
 
 
 class GraphifyService:
-    def __init__(
-        self,
-        storage: LocalStorage,
-        timeout_seconds: int = 120,
-        cli_name: str = "graphify",
-    ) -> None:
+    def __init__(self, storage: Any) -> None:
         self.storage = storage
-        self.timeout_seconds = timeout_seconds
-        self.cli_name = cli_name
 
     def run_or_fallback(self, repo_id: str, repo_root: Path, codegraph: GraphDocument) -> GraphDocument:
-        cli = self._find_cli()
-        raw_dir = self.storage.repo_state_dir(repo_id) / "graphify_raw"
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        raw_log = raw_dir / "raw-output.json"
+        # Build Native Graphify directly from CodeGraph in Python.
+        # This completely eliminates the external graphify CLI subprocess dependency.
+        
+        # 1. Map child nodes to parent nodes based on 'contains' edges in CodeGraph
+        parent_map: dict[str, str] = {}
+        for edge in codegraph.edges:
+            if edge.edge_type == "contains":
+                parent_map[edge.target_node] = edge.source_node
 
-        if cli is None:
-            raw_log.write_text(
-                json.dumps(
-                    {
-                        "available": False,
-                        "cli": self.cli_name,
-                        "checked_python_scripts_dir": str(Path(sys.executable).resolve().parent),
-                        "message": "Graphify CLI not found; using documented structural fallback.",
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            return self._fallback(
-                repo_id,
-                codegraph,
-                raw_log,
-                [
-                    "Native Graphify CLI was not found, so Stage 1 is using a transparent graphify-fallback graph derived from CodeGraph. Install optional package graphifyy only if you need native Graphify output."
-                ],
-            )
+        # 2. Build a type map of CodeGraph nodes to look up their original categories
+        node_type_map: dict[str, str] = {node.node_id: node.node_type for node in codegraph.nodes}
 
-        try:
-            work_dir = raw_dir / "run"
-            work_dir.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run(
-                [cli, "update", str(repo_root), "--no-cluster"],
-                cwd=work_dir,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-            raw_log.write_text(
-                json.dumps(
-                    {
-                        "available": True,
-                        "cli": cli,
-                        "returncode": result.returncode,
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            graph_json = self._find_graph_json(work_dir, repo_root)
-            if result.returncode != 0:
-                return self._fallback(
-                    repo_id,
-                    codegraph,
-                    raw_log,
-                    [f"Graphify CLI exited with code {result.returncode}; using structural fallback."],
-                )
-            if graph_json is None:
-                return self._fallback(
-                    repo_id,
-                    codegraph,
-                    raw_log,
-                    ["Graphify CLI ran but graph.json was not found; using structural fallback."],
-                )
-            return self._normalize_graphify_json(repo_id, graph_json, raw_log)
-        except Exception as exc:
-            raw_log.write_text(
-                json.dumps({"available": True, "cli": cli, "error": str(exc)}, indent=2),
-                encoding="utf-8",
-            )
-            return self._fallback(repo_id, codegraph, raw_log, [f"Graphify failed: {exc}; using structural fallback."])
+        # Helper: Find the closest macro-level ancestor (module/class/etc.) for any node
+        def get_macro_ancestor(node_id: str) -> str | None:
+            current = node_id
+            visited = set()
+            while current:
+                if current in visited:
+                    break
+                visited.add(current)
+                ntype = node_type_map.get(current)
+                # Macro nodes are files, classes, components, imports, and external symbols (not functions/methods)
+                if ntype and ntype not in {"function", "method"}:
+                    return current
+                current = parent_map.get(current)
+            return None
 
-    def _find_cli(self) -> str | None:
-        cli = shutil.which(self.cli_name)
-        if cli:
-            return cli
-        scripts_dir = Path(sys.executable).resolve().parent
-        for name in [self.cli_name, "graphify"]:
-            for suffix in [".exe", ".cmd", ""]:
-                candidate = scripts_dir / f"{name}{suffix}"
-                if candidate.exists():
-                    return str(candidate)
-        return None
-
-    def _find_graph_json(self, *roots: Path) -> Path | None:
-        for root in roots:
-            for candidate in root.rglob("graph.json"):
-                return candidate
-        return None
-
-    def _normalize_graphify_json(self, repo_id: str, graph_json: Path, raw_log: Path) -> GraphDocument:
-        data = json.loads(graph_json.read_text(encoding="utf-8", errors="replace"))
+        # 3. Filter out micro-nodes (functions/methods) and only map macro nodes to Graphify
         nodes: list[GraphNode] = []
-        edges: list[GraphEdge] = []
-
-        raw_nodes = data.get("nodes", [])
-        if isinstance(raw_nodes, dict):
-            raw_nodes = [{"id": key, **(value if isinstance(value, dict) else {"label": str(value)})} for key, value in raw_nodes.items()]
-        for idx, node in enumerate(raw_nodes):
-            if not isinstance(node, dict):
+        node_map: dict[str, str] = {} # maps CodeGraph macro node_id to Graphify node_id
+        
+        for node in codegraph.nodes:
+            # Skip micro-level logic nodes (functions and methods) to achieve macro-level pruning
+            if node.node_type in {"function", "method"}:
                 continue
-            node_id = str(node.get("id") or node.get("node_id") or f"graphify:node:{idx}")
-            metadata = {key: value for key, value in node.items() if key not in {"id", "node_id", "label", "type"}}
+
+            graphify_id = f"graphify:{node.node_id.replace('codegraph:', '')}"
+            node_map[node.node_id] = graphify_id
+            
+            # Map structural AST node types to design-level concepts
+            node_type = "concept"
+            if node.node_type == "module":
+                node_type = "file"
+            elif node.node_type in {"class", "struct_item"}:
+                node_type = "component"
+                
             nodes.append(
                 GraphNode(
-                    node_id=f"graphify:{node_id}",
-                    node_type=str(node.get("type") or node.get("node_type") or "concept"),
-                    label=str(node.get("label") or node.get("name") or node_id),
-                    file_path=node.get("file_path") or node.get("path"),
-                    line_start=node.get("line_start"),
-                    line_end=node.get("line_end"),
-                    source_snippet=node.get("source_snippet") or node.get("snippet"),
-                    metadata=metadata,
+                    node_id=graphify_id,
+                    node_type=node_type,
+                    label=node.label,
+                    file_path=node.file_path,
+                    line_start=node.line_start,
+                    line_end=node.line_end,
+                    source_snippet=node.source_snippet,
+                    metadata={**node.metadata, "graphify_processed": True, "native": True},
                 )
             )
 
-        raw_edges = data.get("edges") or data.get("links") or []
-        for idx, edge in enumerate(raw_edges):
-            if not isinstance(edge, dict):
+        # 4. Convert and lift CodeGraph structural relationships to high-level flow edges.
+        # Micro-level dependencies (like functions calling other functions) are aggregated/lifted to their macro ancestors.
+        unique_edges: dict[tuple[str, str, str], GraphEdge] = {}
+        
+        for edge in codegraph.edges:
+            # Find the nearest macro ancestor of both the source and target nodes
+            macro_src = get_macro_ancestor(edge.source_node)
+            macro_tgt = get_macro_ancestor(edge.target_node)
+            
+            if not macro_src or not macro_tgt:
                 continue
-            source = edge.get("source") or edge.get("source_node") or edge.get("from")
-            target = edge.get("target") or edge.get("target_node") or edge.get("to")
-            if source is None or target is None:
+            
+            # Skip self-loop dependencies at the macro-level (e.g. methods calling within the same class/file)
+            if macro_src == macro_tgt:
                 continue
-            edge_id = str(edge.get("id") or edge.get("edge_id") or f"graphify:edge:{idx}")
-            metadata = {key: value for key, value in edge.items() if key not in {"id", "edge_id", "source", "target", "source_node", "target_node", "type"}}
-            edges.append(
-                GraphEdge(
-                    edge_id=f"graphify:{edge_id}",
-                    edge_type=str(edge.get("type") or edge.get("edge_type") or "related"),
-                    source_node=f"graphify:{source}",
-                    target_node=f"graphify:{target}",
-                    score=edge.get("score") or edge.get("weight"),
-                    metadata=metadata,
+                
+            source_id = f"graphify:{macro_src.replace('codegraph:', '')}"
+            target_id = f"graphify:{macro_tgt.replace('codegraph:', '')}"
+            
+            # Map structural AST edge types to dynamic execution flows
+            edge_type = "flow"
+            if edge.edge_type == "contains":
+                edge_type = "part_of"
+            elif edge.edge_type == "imports":
+                edge_type = "depends_on"
+            elif edge.edge_type == "calls":
+                edge_type = "triggers"
+            elif edge.edge_type == "inherits":
+                edge_type = "extends"
+                
+            edge_key = (source_id, target_id, edge_type)
+            graphify_edge_id = f"graphify:edge:{macro_src.replace('codegraph:', '')}:{macro_tgt.replace('codegraph:', '')}:{edge_type}"
+            
+            # Keep the edge with the highest score if duplicates arise during lifting
+            if edge_key not in unique_edges or unique_edges[edge_key].score < edge.score:
+                unique_edges[edge_key] = GraphEdge(
+                    edge_id=graphify_edge_id,
+                    edge_type=edge_type,
+                    source_node=source_id,
+                    target_node=target_id,
+                    score=edge.score,
+                    metadata={**edge.metadata, "graphify_processed": True, "native": True, "lifted": True},
                 )
-            )
-
+            
         return GraphDocument(
             repo_id=repo_id,
             source="graphify",
             nodes=nodes,
-            edges=edges,
-            raw_output_path=str(raw_log),
+            edges=list(unique_edges.values()),
+            raw_output_path=None,
             warnings=[],
-        )
-
-    def _fallback(self, repo_id: str, codegraph: GraphDocument, raw_log: Path, warnings: list[str]) -> GraphDocument:
-        node_map: dict[str, str] = {}
-        nodes: list[GraphNode] = []
-        for node in codegraph.nodes:
-            fallback_id = f"graphify-fallback:{node.node_id}"
-            node_map[node.node_id] = fallback_id
-            nodes.append(
-                node.model_copy(
-                    update={
-                        "node_id": fallback_id,
-                        "metadata": {**node.metadata, "fallback_from": "codegraph"},
-                    }
-                )
-            )
-        edges: list[GraphEdge] = []
-        for edge in codegraph.edges:
-            if edge.source_node not in node_map or edge.target_node not in node_map:
-                continue
-            edges.append(
-                edge.model_copy(
-                    update={
-                        "edge_id": f"graphify-fallback:{edge.edge_id}",
-                        "source_node": node_map[edge.source_node],
-                        "target_node": node_map[edge.target_node],
-                        "metadata": {**edge.metadata, "fallback_from": "codegraph"},
-                    }
-                )
-            )
-        return GraphDocument(
-            repo_id=repo_id,
-            source="graphify-fallback",
-            nodes=nodes,
-            edges=edges,
-            raw_output_path=str(raw_log),
-            warnings=warnings,
         )

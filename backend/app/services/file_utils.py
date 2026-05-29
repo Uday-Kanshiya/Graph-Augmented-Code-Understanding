@@ -38,12 +38,12 @@ def read_text_lossy(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def source_snippet(text: str, line_start: int, line_end: int, max_chars: int = 2200) -> str:
+def source_snippet(text: str, line_start: int, line_end: int, max_chars: int | None = 800) -> str:
     lines = text.splitlines()
     start = max(0, line_start - 1)
     end = min(len(lines), line_end)
     snippet = "\n".join(lines[start:end])
-    if len(snippet) > max_chars:
+    if max_chars is not None and len(snippet) > max_chars:
         return snippet[:max_chars] + "\n..."
     return snippet
 
@@ -52,21 +52,50 @@ def is_ignored(path: Path) -> bool:
     return any(part in IGNORED_DIRS for part in path.parts)
 
 
-def iter_python_files(root: Path) -> list[RepoFile]:
+EXTENSION_TO_LANGUAGE = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+}
+
+
+def iter_code_files(root: Path) -> list[RepoFile]:
     files: list[RepoFile] = []
-    for path in sorted(root.rglob("*.py")):
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
         rel = path.relative_to(root)
         if is_ignored(rel):
             continue
-        text = read_text_lossy(path)
-        files.append(
-            RepoFile(
-                path=rel.as_posix(),
-                size_bytes=path.stat().st_size,
-                line_count=len(text.splitlines()),
+        suffix = path.suffix.lower()
+        if suffix in EXTENSION_TO_LANGUAGE:
+            text = read_text_lossy(path)
+            language = EXTENSION_TO_LANGUAGE[suffix]
+            files.append(
+                RepoFile(
+                    path=rel.as_posix(),
+                    language=language,
+                    size_bytes=path.stat().st_size,
+                    line_count=len(text.splitlines()),
+                )
             )
-        )
     return files
+
+
+def iter_python_files(root: Path) -> list[RepoFile]:
+    return iter_code_files(root)
 
 
 def safe_extract_zip(zip_path: Path, destination: Path) -> None:
