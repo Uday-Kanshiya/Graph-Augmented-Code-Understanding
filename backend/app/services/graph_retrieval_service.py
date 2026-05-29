@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
 
 from app.models.schemas import GraphEdge, GraphNode, SourceSnippet, TokenMeasurement
@@ -152,30 +153,44 @@ class GraphRetrievalService:
             all_nodes = merged_nodes
             all_edges = merged_edges
 
-        # 1. Map max_nodes limits dynamically to primary anchor and neighbor budget settings
+        # 1. Base limits mapping (Tight, Balanced, Deep selector)
         if max_nodes <= 8:
-            max_anchors = 2
-            max_neighbors = 4
+            base_anchors, base_neighbors = 2, 4
             limit_chars = 500
         elif max_nodes <= 14:
-            max_anchors = 4
-            max_neighbors = 8
+            base_anchors, base_neighbors = 4, 8
             limit_chars = 1000
         else:
-            max_anchors = 8
-            max_neighbors = 16
+            base_anchors, base_neighbors = 8, 16
             limit_chars = 1500
+
+        # Dynamically scale actual limits based on total nodes (N) in the active repository graph
+        N = len(all_nodes)
+        if N <= 100:
+            scale_factor = 0.5
+        elif N <= 1000:
+            scale_factor = 1.0
+        elif N <= 5000:
+            scale_factor = 2.0
+        else:
+            scale_factor = 3.0
+
+        max_anchors = max(2, int(base_anchors * scale_factor))
+        max_neighbors = max(4, int(base_neighbors * scale_factor))
 
         # 2. Run global PageRank centrality scoring
         pr_map = self._compute_pagerank(all_nodes, all_edges)
         
-        # Sort nodes by PageRank to find the ranks and apply rank-based boosts (top 5 get 1.0 down to 0.2)
+        # Calculate dynamic number of boosted PageRank hubs based on codebase size (~1% of codebase, capped between 5 and 30)
+        H = max(5, min(30, int(N * 0.01)))
+        
+        # Sort nodes by PageRank and assign decaying calibrated boosts (scaled to exact name match weight of +8.0)
         sorted_by_pr = sorted(all_nodes, key=lambda n: pr_map.get(n.node_id, 0.0), reverse=True)
         pr_boost = {}
-        for index, node in enumerate(sorted_by_pr):
-            pr_boost[node.node_id] = max(0.0, 1.0 - index * 0.2)
+        for index, node in enumerate(sorted_by_pr[:H]):
+            pr_boost[node.node_id] = 8.0 * (1.0 - (index / H))
 
-        # 3. Perform dynamic Light-to-Full checks on all nodes to calculate scoring
+        # 3. Perform dynamic Light-to-Full checks on all nodes and score with BM25
         terms = self._terms(query)
         
         # Traceback Line Number Scorer: extract line numbers (e.g. 'line 25' or 'file.py:25' or 'L25')
@@ -188,55 +203,56 @@ class GraphRetrievalService:
                 except ValueError:
                     pass
 
+        # BM25 Precomputations: Average document length of all haystacks in the repo
+        doc_lengths = {}
+        doc_terms = {}
+        for node in all_nodes:
+            sig = self._extract_node_signature(node)
+            has_sig_match = any(term in sig.lower() for term in terms)
+            if has_sig_match and node.source_snippet:
+                haystack = (node.label or "") + " " + (node.node_type or "") + " " + (node.file_path or "") + " " + node.source_snippet + " " + " ".join(str(value) for value in node.metadata.values())
+            else:
+                haystack = (node.label or "") + " " + (node.node_type or "") + " " + (node.file_path or "") + " " + sig + " " + " ".join(str(value) for value in node.metadata.values())
+            
+            haystack_lower = haystack.lower()
+            doc_lengths[node.node_id] = len(haystack_lower)
+            doc_terms[node.node_id] = haystack_lower
+            
+        avg_dl = sum(doc_lengths.values()) / max(1, len(doc_lengths))
+        
+        # Precompute document frequency (DF) for each query term across all haystacks
+        df = {term: 0 for term in terms}
+        for haystack_lower in doc_terms.values():
+            for term in terms:
+                if term in haystack_lower:
+                    df[term] += 1
+
         node_scores = {}
+        k1 = 1.2
+        b = 0.75
         
         for node in all_nodes:
-            # Extract lightweight signature (name, declarations, docstrings)
-            sig = self._extract_node_signature(node)
-            sig_lower = sig.lower()
+            haystack_lower = doc_terms[node.node_id]
+            dl = doc_lengths[node.node_id]
             
-            # Check if signature matches any query terms
-            has_sig_match = False
+            # Calculate BM25 Lexical Score
+            bm25_score = 0.0
             for term in terms:
-                if term in sig_lower:
-                    has_sig_match = True
-                    break
-            
-            # Dynamically promote to Full Check if matching, otherwise perform Light Check
-            if has_sig_match and node.source_snippet:
-                haystack = " ".join(
-                    filter(
-                        None,
-                        [
-                            node.label,
-                            node.node_type,
-                            node.file_path or "",
-                            node.source_snippet, # Scan entire snippet body
-                            " ".join(str(value) for value in node.metadata.values()),
-                        ],
-                    )
-                ).lower()
-            else:
-                haystack = " ".join(
-                    filter(
-                        None,
-                        [
-                            node.label,
-                            node.node_type,
-                            node.file_path or "",
-                            sig, # Scan signature block only
-                            " ".join(str(value) for value in node.metadata.values()),
-                        ],
-                    )
-                ).lower()
+                df_t = df[term]
+                # Inverse Document Frequency (IDF)
+                idf = math.log((N - df_t + 0.5) / (df_t + 0.5) + 1.0) if df_t > 0 else 0.0
+                # Term Frequency (TF)
+                tf = haystack_lower.count(term)
+                # BM25 term calculation
+                term_score = idf * (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * (dl / avg_dl)))
+                bm25_score += term_score
                 
-            # Lexical scoring
-            score = 0.0
+            score = bm25_score
+            
+            # Direct exact label keyword matches (name match)
             for term in terms:
                 if term in node.label.lower():
-                    score += 8
-                if term in haystack:
-                    score += haystack.count(term)
+                    score += 8.0
             if node.node_type in {"function", "class", "method"}:
                 score += 0.2
                 
@@ -247,7 +263,6 @@ class GraphRetrievalService:
                     if node.line_start <= line_num <= node.line_end:
                         line_boost += 15.0
                 
-            # Add rank-based PageRank boost score and line boost to lexical score
             node_scores[node.node_id] = score + pr_boost.get(node.node_id, 0.0) + line_boost
 
         # 4. Select top K Primary Anchors based on final scores
@@ -264,18 +279,32 @@ class GraphRetrievalService:
         # 5. Select top N Neighbor Nodes linked in the graph, ranked by score
         adjacent_edges: list[GraphEdge] = []
         neighbor_ids = set()
+        edge_by_neighbor = {}
         for edge in all_edges:
             if edge.source_node in selected_anchors or edge.target_node in selected_anchors:
                 adjacent_edges.append(edge)
                 other_id = edge.target_node if edge.source_node in selected_anchors else edge.source_node
                 if other_id not in selected_anchors:
                     neighbor_ids.add(other_id)
+                    edge_by_neighbor[other_id] = edge.edge_type
                     
         node_by_id = {node.node_id: node for node in all_nodes}
         neighbor_nodes = [node_by_id[nid] for nid in neighbor_ids if nid in node_by_id]
         
-        # Rank the neighbors by score and keep the top N
-        ranked_neighbors = sorted(neighbor_nodes, key=lambda n: node_scores.get(n.node_id, 0.0), reverse=True)
+        # Rank neighbors by applying connection weights to their scores
+        neighbor_weighted_scores = {}
+        for node in neighbor_nodes:
+            edge_type = edge_by_neighbor.get(node.node_id, "imports")
+            if edge_type in {"calls", "triggers", "inherits", "extends"}:
+                w_edge = 1.5
+            elif edge_type in {"contains", "part_of"}:
+                w_edge = 1.2
+            else:
+                w_edge = 1.0 # imports, depends_on
+                
+            neighbor_weighted_scores[node.node_id] = node_scores.get(node.node_id, 0.0) * w_edge
+            
+        ranked_neighbors = sorted(neighbor_nodes, key=lambda n: neighbor_weighted_scores.get(n.node_id, 0.0), reverse=True)
         selected_neighbors = {node.node_id: node for node in ranked_neighbors[:max_neighbors]}
 
         # Combine nodes and select subset of edges
