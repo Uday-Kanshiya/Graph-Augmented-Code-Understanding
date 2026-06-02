@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import textwrap
 import re
 import difflib
 import hashlib
@@ -17,7 +16,7 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.models.schemas import GraphDocument, QueryRecord, RepoMetadata, TreeNode  # noqa: E402
+from app.models.schemas import GraphDocument, QueryRecord, RepoMetadata  # noqa: E402
 from app.services.analysis_pipeline import AnalysisPipeline  # noqa: E402
 from app.services.chat_service import ChatService  # noqa: E402
 from app.services.codegraph_service import CodeGraphService  # noqa: E402
@@ -26,7 +25,6 @@ from app.services.graph_retrieval_service import GraphRetrievalService  # noqa: 
 from app.services.graphify_service import GraphifyService  # noqa: E402
 from app.services.llm.gemini import GeminiProvider  # noqa: E402
 from app.services.repo_service import RepoService  # noqa: E402
-from app.services.retrieval_service import RetrievalService  # noqa: E402
 from app.services.storage import LocalStorage  # noqa: E402
 from app.services.token_service import TokenService  # noqa: E402
 from app.services.tree_sitter_service import TreeSitterService  # noqa: E402
@@ -35,8 +33,194 @@ from app.services.tree_sitter_service import TreeSitterService  # noqa: E402
 st.set_page_config(
     page_title="Context Optimization Engine",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
+
+# Inject custom modern dark UI styles
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+    
+    /* Set base font-family on application wrapper without forcing it on icon fonts */
+    .stApp {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    /* Target only text containers specifically to keep them stylized but prevent breaking icon fonts */
+    .stMarkdown, .stMarkdown p, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5, .stMarkdown h6,
+    h1, h2, h3, h4, h5, h6,
+    .gradient-text,
+    div[data-testid="stMetricValue"] *, 
+    div[data-testid="stMetricLabel"] *,
+    div.stButton > button,
+    button[data-baseweb="tab"] {
+        font-family: 'Plus Jakarta Sans', sans-serif !important;
+    }
+    
+    /* Title and gradients */
+    .gradient-text {
+        background: linear-gradient(135deg, #a855f7 0%, #6366f1 50%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+    }
+    
+    /* Metrics Card styling */
+    div[data-testid="stMetric"] {
+        background: rgba(17, 24, 39, 0.75) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 16px !important;
+        padding: 1.25rem !important;
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.25) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px) !important;
+        border-color: rgba(99, 102, 241, 0.4) !important;
+        box-shadow: 0 10px 25px rgba(99, 102, 241, 0.15) !important;
+    }
+    div[data-testid="stMetricValue"] > div {
+        font-size: 2.25rem !important;
+        font-weight: 700 !important;
+        color: #818cf8 !important;
+    }
+    div[data-testid="stMetricLabel"] > div {
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+        color: #9ca3af !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
+    }
+    
+    /* Sleek buttons styling */
+    div.stButton > button {
+        background: rgba(255, 255, 255, 0.04) !important;
+        color: #f3f4f6 !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 10px !important;
+        padding: 0.5rem 1.5rem !important;
+        font-weight: 600 !important;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    div.stButton > button:hover {
+        background: rgba(255, 255, 255, 0.08) !important;
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        transform: translateY(-1px) !important;
+    }
+    div.stButton > button:active {
+        transform: translateY(1px) !important;
+    }
+    
+    /* Primary buttons gradient */
+    div.stButton > button[data-testid="baseButton-primary"] {
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3) !important;
+    }
+    div.stButton > button[data-testid="baseButton-primary"]:hover {
+        background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%) !important;
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4) !important;
+        transform: translateY(-2px) !important;
+    }
+    
+    /* Modern Tabs */
+    div[data-baseweb="tab-list"] {
+        gap: 12px !important;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.06) !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 24px !important;
+    }
+    button[data-baseweb="tab"] {
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        color: #9ca3af !important;
+        background-color: transparent !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 8px 18px !important;
+        transition: all 0.2s ease !important;
+    }
+    button[data-baseweb="tab"]:hover {
+        color: #f3f4f6 !important;
+        background-color: rgba(255, 255, 255, 0.03) !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: #a5b4fc !important;
+        background-color: rgba(99, 102, 241, 0.1) !important;
+    }
+    div[data-baseweb="tab-highlight"] {
+        background-color: #6366f1 !important;
+        height: 3px !important;
+        border-radius: 3px !important;
+    }
+    
+    /* Selectboxes, Text Inputs, Text Areas */
+    div[data-baseweb="select"] > div {
+        background-color: #111827 !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 10px !important;
+    }
+    div[data-testid="stTextInput"] input, div[data-testid="stTextArea"] textarea {
+        background-color: #111827 !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 10px !important;
+        color: #f9fafb !important;
+    }
+    
+    /* Dataframe table border and header radius */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        background-color: #111827 !important;
+    }
+    
+    /* Main area styling */
+    .block-container {
+        padding-top: 3rem !important;
+        padding-bottom: 3rem !important;
+    }
+    
+    /* Expanders styling */
+    div[data-testid="stExpander"] {
+        background: rgba(17, 24, 39, 0.4) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15) !important;
+        margin-bottom: 16px !important;
+    }
+    div[data-testid="stExpander"] > details {
+        border: none !important;
+    }
+    div[data-testid="stExpander"] summary {
+        color: #e5e7eb !important;
+    }
+    div[data-testid="stExpander"] summary:hover {
+        color: #6366f1 !important;
+    }
+    
+    /* Code block styling */
+    div[data-testid="stCodeBlock"] {
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background-color: #0b0f19 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 
 def get_secret(name: str, default: str | None = None) -> str | None:
@@ -78,10 +262,10 @@ def services():
         api_key=get_secret("GEMINI_API_KEY"),
         model=get_secret("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash",
     )
+    graph_retrieval_service = GraphRetrievalService(storage=storage, token_service=token_service)
     chat_service = ChatService(
         storage=storage,
-        retrieval_service=RetrievalService(storage=storage, token_service=token_service),
-        graph_retrieval_service=GraphRetrievalService(storage=storage, token_service=token_service),
+        graph_retrieval_service=graph_retrieval_service,
         token_service=token_service,
         llm_provider=llm_provider,
         pipeline=pipeline,
@@ -118,58 +302,6 @@ def ingest_uploaded_zip(uploaded_file) -> RepoMetadata:
     return pipeline.analyze_existing(name=repo_name, source_dir=source_dir, origin="upload", repo_id=repo_id)
 
 
-def metric_row(repo: RepoMetadata) -> None:
-    cols = st.columns(4)
-    cols[0].metric("Total files", repo.stats.total_files)
-    cols[1].metric("Python files", repo.stats.python_files)
-    cols[2].metric("Total lines", repo.stats.total_lines)
-    cols[3].metric("Python lines", repo.stats.python_lines)
-
-
-def render_status(repo: RepoMetadata | None) -> None:
-    model_info = llm_provider.get_model_info()
-    st.sidebar.subheader("Status")
-    st.sidebar.write(f"Repo: **{repo.name if repo else 'none'}**")
-    st.sidebar.write(f"Pipeline: **{repo.status if repo else 'idle'}**")
-    st.sidebar.write(f"Model: **{model_info.model}**")
-    st.sidebar.write(f"Gemini key: **{'configured' if model_info.configured else 'missing'}**")
-    
-    st.sidebar.subheader("Context Size Budget")
-    budget_label = st.sidebar.selectbox(
-        "Retrieval Scale Selector",
-        ["Balanced (Recommended)", "Tight (Token Saver)", "Deep (Large Codebase Coverage)"],
-        index=0,
-        help="Adjust context bounds: Balanced is ideal for normal use, Tight minimizes token cost, and Deep is suited for large repositories with many files."
-    )
-    
-    if budget_label == "Tight (Token Saver)":
-        st.session_state.graph_max_nodes = 8
-        anchors, neighbors = 2, 4
-    elif budget_label == "Deep (Large Codebase Coverage)":
-        st.session_state.graph_max_nodes = 24
-        anchors, neighbors = 8, 16
-    else: # Balanced
-        st.session_state.graph_max_nodes = 14
-        anchors, neighbors = 4, 8
-        
-    st.sidebar.caption(
-        f"**Active Limits:** Anchors (Full): `{anchors}` | Neighbors (Signature): `{neighbors}`"
-    )
-
-    
-    st.sidebar.subheader("Codebase Rectifier")
-    st.session_state.rectify_enabled = st.sidebar.checkbox(
-        "🔍 Enable Error Rectification",
-        value=False,
-        help="When enabled, the assistant will propose direct code modifications when bugs or errors are identified, allowing you to overwrite files with a single click."
-    )
-
-    
-    if repo and repo.warnings:
-        with st.sidebar.expander("Warnings", expanded=True):
-            for warning in repo.warnings:
-                render_notice(warning)
-
 
 def render_notice(message: str) -> None:
     if "Graphify" in message and "fallback" in message.lower():
@@ -178,19 +310,7 @@ def render_notice(message: str) -> None:
     st.warning(message)
 
 
-def render_logs(repo: RepoMetadata | None) -> None:
-    st.subheader("Developer / Debug Logs")
-    if not repo:
-        st.info("Load a repository to see pipeline logs.")
-        return
-    logs = storage.load_logs(repo.repo_id)
-    if not logs:
-        st.info("No logs yet.")
-        return
-    st.dataframe(logs, use_container_width=True, hide_index=True)
-
-
-def render_upload_import() -> None:
+def render_upload_import(repo: RepoMetadata | None) -> None:
     st.header("Upload Or Import")
     left, right = st.columns(2)
     with left:
@@ -224,166 +344,45 @@ def render_upload_import() -> None:
         "The app automatically skips .git, virtual environments (.venv), node_modules, build outputs, and caches."
     )
 
-
-def render_repo_analysis(repo: RepoMetadata | None) -> None:
-    st.header("Repo Analysis")
-    if not repo:
-        st.info("Load a repository first.")
-        return
-    metric_row(repo)
-    st.write(f"Origin: `{repo.origin}`")
-    if repo.error:
-        st.error(repo.error)
-    files = storage.load_files(repo.repo_id)
-    st.subheader("Python Files")
-    st.dataframe([file.model_dump() for file in files], use_container_width=True, hide_index=True)
-    render_logs(repo)
-
-
-def node_label(node: TreeNode) -> str:
-    start_line = node.start_point[0] + 1
-    end_line = node.end_point[0] + 1
-    suffix = f" | {node.text_preview}" if node.text_preview else ""
-    return f"{node.type} [{start_line}:{node.start_point[1]} - {end_line}:{node.end_point[1]}]{suffix}"
-
-
-def collect_tree_rows(
-    node: TreeNode,
-    depth: int,
-    max_depth: int,
-    budget: list[int],
-    rows: list[dict[str, str | int | bool | None]],
-) -> None:
-    if budget[0] <= 0:
-        return
-    budget[0] -= 1
-    start_line = node.start_point[0] + 1
-    end_line = node.end_point[0] + 1
-    rows.append(
-        {
-            "tree": f"{'  ' * depth}{node.type}",
-            "depth": depth,
-            "named": node.named,
-            "start": f"{start_line}:{node.start_point[1]}",
-            "end": f"{end_line}:{node.end_point[1]}",
-            "preview": node.text_preview,
-        }
-    )
-    if depth < max_depth:
-        for child in node.children:
-            collect_tree_rows(child, depth + 1, max_depth, budget, rows)
-
-
-def flatten_named_nodes(node: TreeNode, output: list[TreeNode], limit: int = 500) -> None:
-    if len(output) >= limit:
-        return
-    if node.named:
-        output.append(node)
-    for child in node.children:
-        flatten_named_nodes(child, output, limit)
-
-
-def dot_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', "'").replace("\n", "\\n")
-
-
-def tree_to_dot(root: TreeNode, max_depth: int = 5, max_nodes: int = 180) -> tuple[str, bool]:
-    lines = [
-        "digraph TreeSitter {",
-        "rankdir=TB;",
-        'node [shape=box, style="rounded,filled", fillcolor="#fbfcfa", color="#bfc8c2", fontsize=10];',
-        'edge [color="#6d4b7d"];',
-    ]
-    counter = {"value": 0}
-    truncated = {"value": False}
-
-    def visit(node: TreeNode, depth: int) -> str | None:
-        if counter["value"] >= max_nodes:
-            truncated["value"] = True
-            return None
-        current_id = f"n{counter['value']}"
-        counter["value"] += 1
-        start_line = node.start_point[0] + 1
-        label = dot_escape(f"{node.type}\\nL{start_line}")
-        fill = "#e6f4f1" if node.named else "#f7f8f6"
-        lines.append(f'"{current_id}" [label="{label}", fillcolor="{fill}"];')
-        if depth < max_depth:
-            for child in node.children:
-                child_id = visit(child, depth + 1)
-                if child_id:
-                    lines.append(f'"{current_id}" -> "{child_id}";')
-        elif node.children:
-            truncated["value"] = True
-        return current_id
-
-    visit(root, 0)
-    lines.append("}")
-    return "\n".join(lines), truncated["value"]
-
-
-def render_tree_sitter(repo: RepoMetadata | None) -> None:
-    st.header("Tree-sitter Explorer")
-    if not repo:
-        st.info("Load a repository first.")
-        return
-    files = storage.load_files(repo.repo_id)
-    if not files:
-        st.info("No Python files available.")
-        return
-    selected = st.selectbox(
-        "File",
-        [file.path for file in files],
-        index=0,
-        key="tree_file_select",
-    )
-    document = storage.load_tree_sitter(repo.repo_id, selected)
-    if not document:
-        st.error("Tree-sitter output not found.")
-        return
-    if document.warnings:
-        for warning in document.warnings:
-            st.warning(warning)
-    if document.parse_error:
-        st.error(document.parse_error)
-        st.code(document.source, language="python")
-        return
-
-    left, right = st.columns([0.42, 0.58])
-    with left:
-        st.subheader("Parse Tree")
-        max_depth = st.slider("Expansion depth", 2, 8, 5)
-        max_nodes = st.slider("Rendered nodes", 50, 1000, 300, step=50)
-        if document.root:
-            rows: list[dict[str, str | int | bool | None]] = []
-            collect_tree_rows(document.root, 0, max_depth, [max_nodes], rows)
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-            st.subheader("Parse Tree Graph")
-            dot, truncated = tree_to_dot(document.root, max_depth=max_depth, max_nodes=min(max_nodes, 220))
-            if truncated:
-                st.info("Graph view is truncated by the depth/node controls to keep the page responsive.")
-            st.graphviz_chart(dot, use_container_width=True)
-    with right:
-        st.subheader("Source Span")
-        if document.root:
-            named_nodes: list[TreeNode] = []
-            flatten_named_nodes(document.root, named_nodes)
-            labels = [node_label(node) for node in named_nodes]
-            selected_index = st.selectbox("Highlight node", range(len(labels)), format_func=lambda index: labels[index])
-            chosen = named_nodes[selected_index]
-            start_line = chosen.start_point[0] + 1
-            end_line = chosen.end_point[0] + 1
-            lines = document.source.splitlines()
-            snippet = "\n".join(lines[max(0, start_line - 1) : min(len(lines), end_line)])
-            st.caption(f"{selected}:{start_line}-{end_line}")
-            st.code(snippet or document.source, language="python", line_numbers=True)
+    if repo:
+        st.divider()
+        st.subheader("Repository Summary")
+        cols = st.columns(4)
+        cols[0].metric("Total files", repo.stats.total_files)
+        cols[1].metric("Python files", repo.stats.python_files)
+        cols[2].metric("Total lines", repo.stats.total_lines)
+        cols[3].metric("Python lines", repo.stats.python_lines)
+        st.write(f"**Origin:** `{repo.origin}`")
+        if repo.error:
+            st.error(repo.error)
+        
+        # Display files by language in table format
+        files = storage.load_files(repo.repo_id)
+        if files:
+            st.subheader("Files by Language")
+            
+            # Create a list of file data with path and language
+            file_data = [
+                {"File": file.path, "Language": file.language or "unknown"}
+                for file in files
+            ]
+            
+            # Display as table
+            st.dataframe(file_data, use_container_width=True, hide_index=True)
 
 
 def graph_to_dot(graph: GraphDocument, max_nodes: int = 80, max_edges: int = 160) -> str:
     visible_nodes = graph.nodes[:max_nodes]
     visible = {node.node_id for node in visible_nodes}
-    lines = ["digraph G {", "rankdir=LR;", 'node [shape=box, style="rounded,filled", fillcolor="#f7f8f6", color="#bfc8c2"];']
+    lines = [
+        "digraph G {", 
+        "rankdir=LR;", 
+        "bgcolor=transparent;",
+        'node [shape=box, style="rounded,filled", fillcolor="#111827", color="#374151", fontcolor="#f9fafb", fontname="Plus Jakarta Sans", fontsize=10, penwidth=1.5];',
+        'edge [color="#4b5563", fontcolor="#9ca3af", fontname="Plus Jakarta Sans", fontsize=8, penwidth=1.2];'
+    ]
     for node in visible_nodes:
-        label = f"{node.node_type}\\n{node.label}".replace('"', "'")
+        label = f"[{node.node_type.upper()}]\\n{node.label}".replace('"', "'")
         lines.append(f'"{node.node_id}" [label="{label}"];')
     for edge in graph.edges:
         if edge.source_node in visible and edge.target_node in visible:
@@ -612,44 +611,11 @@ def render_tokens(repo: RepoMetadata | None) -> None:
         else:
             st.info("Ask a question in **Graph QA** to see direct query-by-query token savings here!")
             
-        st.subheader("📜 All Query History & Token Usage")
-        history_rows = []
-        for q_rec in queries:
-            prompt_meas = q_rec.token_usage.get("llm_prompt_tokens")
-            resp_meas = q_rec.token_usage.get("llm_response_tokens")
-            total_meas = q_rec.token_usage.get("total_per_query_tokens")
-            
-            history_rows.append({
-                "Time": q_rec.created_at.strftime("%H:%M:%S") if q_rec.created_at else "N/A",
-                "Mode": "Graph-Optimized" if q_rec.mode == "graph_optimized" else "Standard",
-                "Question": q_rec.query,
-                "LLM Prompt (Input)": prompt_meas.tokens if prompt_meas else 0,
-                "LLM Response (Output)": resp_meas.tokens if resp_meas else 0,
-                "Total Query Tokens": total_meas.tokens if total_meas else 0,
-                "Latency": f"{q_rec.latency_ms} ms"
-            })
-        st.dataframe(history_rows, use_container_width=True, hide_index=True)
+        # "All Query History & Token Usage" section removed as requested.
     else:
         st.info("No queries have been run in this session yet. Go to Graph QA to ask a question!")
 
-    # Collapsible Ingestion Pipeline Measurements
-    summary = storage.load_token_summary(repo.repo_id)
-    if summary:
-        with st.expander("🛠️ Static Ingestion & Parsing Pipeline Measurements (Raw Code & Graph Build)"):
-            st.markdown(
-                "These tokens represent the static sizes of the files and graphs during ingestion and parsing. "
-                "They are stored locally and are **not** sent to the LLM on every query."
-            )
-            pipeline_rows = [measurement.model_dump() for measurement in summary.stages.values()]
-            st.dataframe(pipeline_rows, use_container_width=True, hide_index=True)
-            
-            if summary.cumulative_session_usage:
-                st.markdown("#### Cumulative Raw Stage Measurements")
-                st.dataframe(
-                    [{"stage": key, "tokens": value} for key, value in summary.cumulative_session_usage.items()],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+    # Static ingestion & parsing pipeline measurements removed per user request.
 
 
 def parse_and_render_code_fix(answer_text: str, repo_id: str) -> None:
@@ -734,7 +700,8 @@ def subgraph_to_dot(record: QueryRecord) -> str:
         "digraph G {", 
         "rankdir=LR;", 
         "bgcolor=transparent;",
-        'node [shape=box, style="rounded,filled", fontname="Courier New", fontsize=9];'
+        'node [shape=box, style="rounded,filled", fontname="Plus Jakarta Sans", fontsize=10];',
+        'edge [fontname="Plus Jakarta Sans", fontsize=8, penwidth=1.2];'
     ]
     
     # Identify which nodes are anchors based on source snippets
@@ -750,14 +717,14 @@ def subgraph_to_dot(record: QueryRecord) -> str:
         label = f"[{node.node_type.upper()}]\\n{node.label}".replace('"', "'")
         
         if is_anchor:
-            # Gold premium outline for Primary Anchors (full bodies)
+            # Gold/amber premium outline for Primary Anchors (full bodies)
             lines.append(
-                f'"{node_id_escaped}" [label="{label}", fillcolor="#fff3bf", color="#f08c00", penwidth=2.5];'
+                f'"{node_id_escaped}" [label="{label}", fillcolor="#fef3c7", color="#f59e0b", fontcolor="#1e293b", penwidth=2.5];'
             )
         else:
             # Sleek slate gray outline for Neighbor Nodes (signatures)
             lines.append(
-                f'"{node_id_escaped}" [label="{label}", fillcolor="#f1f3f5", color="#adb5bd", penwidth=1.2];'
+                f'"{node_id_escaped}" [label="{label}", fillcolor="#111827", color="#4b5563", fontcolor="#cbd5e1", penwidth=1.5];'
             )
             
     # Render edges
@@ -766,7 +733,7 @@ def subgraph_to_dot(record: QueryRecord) -> str:
         if edge.source_node in visible_node_ids and edge.target_node in visible_node_ids:
             label = edge.edge_type.replace('"', "'")
             lines.append(
-                f'"{edge.source_node}" -> "{edge.target_node}" [label="{label}", color="#495057", fontcolor="#495057", fontsize=8];'
+                f'"{edge.source_node}" -> "{edge.target_node}" [label="{label}", color="#6366f1", fontcolor="#9ca3af"];'
             )
             
     lines.append("}")
@@ -915,6 +882,12 @@ def render_query_record(record: QueryRecord) -> None:
 
         with st.expander("Selected Graph Nodes"):
             st.dataframe([node.model_dump() for node in record.selected_nodes], use_container_width=True, hide_index=True)
+
+        with st.expander("Selected Graph Edges"):
+            if record.selected_edges:
+                st.dataframe([edge.model_dump() for edge in record.selected_edges], use_container_width=True, hide_index=True)
+            else:
+                st.info("No graph edges were selected for this query.")
             
     with st.expander("Source Snippets", expanded=True):
         for snippet in record.source_snippets:
@@ -953,26 +926,6 @@ def qa_prompt_help() -> str:
     return "Ask about architecture, important functions, call paths, classes, imports, or implementation behavior."
 
 
-def render_standard_qa(repo: RepoMetadata | None) -> None:
-    st.header("Standard Repo QA")
-    if not repo:
-        st.info("Load a repository first.")
-        return
-    query = st.text_area("Question", placeholder=qa_prompt_help(), key="standard_query")
-    if st.button("Ask Standard QA", disabled=not query.strip(), type="primary"):
-        with st.spinner("Building chunk context and calling Gemini..."):
-            record = chat_service.standard_qa(
-                repo.repo_id,
-                query.strip(),
-                st.session_state.session_id,
-                limit=st.session_state.get("standard_limit", 8),
-                rectify=st.session_state.get("rectify_enabled", False)
-            )
-            st.session_state.standard_record = record
-    if "standard_record" in st.session_state:
-        render_query_record(st.session_state.standard_record)
-
-
 def render_graph_qa(repo: RepoMetadata | None) -> None:
     st.header("Graph-Optimized Repo QA")
     if not repo:
@@ -980,148 +933,88 @@ def render_graph_qa(repo: RepoMetadata | None) -> None:
         return
     codegraph = storage.load_codegraph(repo.repo_id)
     graphify = storage.load_graphify(repo.repo_id)
+    codegraph_count = len(codegraph.nodes) if codegraph else 0
+    graphify_count = len(graphify.nodes) if graphify else 0
+
     st.caption(
-        f"Graph QA retrieves from CodeGraph ({len(codegraph.nodes) if codegraph else 0} nodes) plus "
-        f"{graphify.source if graphify else 'missing Graphify'} ({len(graphify.nodes) if graphify else 0} nodes)."
+        f"Graph QA uses a single selected graph source. Choose CodeGraph or Graphify. "
+        f"If the chosen source is unavailable, the app will report it instead of falling back."
     )
-    
-    # Expose graph source selection dropdown
+    st.info(
+        f"Available sources: CodeGraph = {codegraph_count} nodes, Graphify = {graphify_count} nodes."
+    )
+
     source_label = st.selectbox(
         "Retrieve Graph Context from:",
-        ["Merged CodeGraph + Graphify", "CodeGraph (Static Structure) Only", "Graphify (Flow Analysis) Only"],
+        ["CodeGraph", "Graphify"],
         index=0,
         key="graph_source_select"
     )
-    source_selection = "merged"
-    if "Static Structure" in source_label:
-        source_selection = "codegraph"
-    elif "Flow Analysis" in source_label:
-        source_selection = "graphify"
+    source_selection = "codegraph" if "CodeGraph" in source_label else "graphify"
+
+    budget_label = st.selectbox(
+        "Context Size Budget:",
+        ["Balanced (Recommended)", "Tight (Token Saver)", "Deep (Large Codebase Coverage)"],
+        index=0,
+        help="Adjust context bounds: Balanced is ideal for normal use, Tight minimizes token cost, and Deep is suited for large repositories with many files."
+    )
+    
+    if budget_label == "Tight (Token Saver)":
+        st.session_state.graph_max_nodes = 8
+    elif budget_label == "Deep (Large Codebase Coverage)":
+        st.session_state.graph_max_nodes = 24
+    else: # Balanced
+        st.session_state.graph_max_nodes = 14
+
+    source_available = (source_selection == "codegraph" and codegraph_count > 0) or (
+        source_selection == "graphify" and graphify_count > 0
+    )
+
+    if not source_available:
+        st.error(f"{source_label} is not available for this repository.")
 
     query = st.text_area("Question", placeholder=qa_prompt_help(), key="graph_query")
-    if st.button("Ask Graph QA", disabled=not query.strip(), type="primary"):
-        with st.spinner("Selecting graph neighborhood and calling Gemini..."):
-            record = chat_service.graph_optimized_qa(
-                repo.repo_id,
-                query.strip(),
-                st.session_state.session_id,
-                source_selection=source_selection,
-                max_nodes=st.session_state.get("graph_max_nodes", 8),
-                rectify=st.session_state.get("rectify_enabled", False)
-            )
-            st.session_state.graph_record = record
+    if st.button("Ask Graph QA", disabled=not query.strip() or not source_available, type="primary"):
+        if not source_available:
+            st.error(f"Cannot run Graph QA because {source_label} is unavailable.")
+        else:
+            with st.spinner("Selecting graph neighborhood and calling Gemini..."):
+                record = chat_service.graph_optimized_qa(
+                    repo.repo_id,
+                    query.strip(),
+                    st.session_state.session_id,
+                    source_selection=source_selection,
+                    max_nodes=st.session_state.get("graph_max_nodes", 8),
+                )
+                st.session_state.graph_record = record
 
     if "graph_record" in st.session_state:
         render_query_record(st.session_state.graph_record)
 
 
-def render_compare(repo: RepoMetadata | None) -> None:
-    st.header("Compare Baseline vs Graph-Optimized")
-    if not repo:
-        st.info("Load a repository first.")
-        return
-    st.markdown(
-        "Run a comparison to see how much **LLM Prompt (input) tokens** are reduced using Graph-Optimized QA compared to Standard Retrieval QA. "
-        "Reducing prompt tokens directly helps you stay within LLM context window limits and saves cost."
-    )
-    
-    # Expose graph source selection dropdown for comparison
-    source_label = st.selectbox(
-        "Retrieve Graph Context from:",
-        ["Merged CodeGraph + Graphify", "CodeGraph (Static Structure) Only", "Graphify (Flow Analysis) Only"],
-        index=0,
-        key="compare_source_select"
-    )
-    source_selection = "merged"
-    if "Static Structure" in source_label:
-        source_selection = "codegraph"
-    elif "Flow Analysis" in source_label:
-        source_selection = "graphify"
 
-    query = st.text_area("Question", placeholder="Run the same query through both modes.", key="compare_query")
-    if st.button("Run comparison", disabled=not query.strip(), type="primary"):
-        with st.spinner("Running both QA modes..."):
-            st.session_state.compare_result = chat_service.compare(
-                repo.repo_id,
-                query.strip(),
-                st.session_state.session_id,
-                source_selection=source_selection,
-                limit=st.session_state.get("standard_limit", 8),
-                max_nodes=st.session_state.get("graph_max_nodes", 8)
-            )
-    result = st.session_state.get("compare_result")
-    if not result:
-        return
-        
-    st.subheader("LLM Prompt Token Reduction Analysis")
-    
-    # Read the values safely with fallback for older query records
-    is_new_format = "baseline_prompt_tokens" in result.token_savings
-    
-    baseline_val = result.token_savings.get("baseline_prompt_tokens") if is_new_format else result.token_savings.get("baseline_context_tokens", 0)
-    optimized_val = result.token_savings.get("optimized_prompt_tokens") if is_new_format else result.token_savings.get("optimized_context_tokens", 0)
-    saved_val = result.token_savings.get("saved_prompt_tokens") if is_new_format else result.token_savings.get("saved_context_tokens", 0)
-    saved_pct = result.token_savings.get("saved_percent", 0)
-    
-    cols = st.columns(4)
-    cols[0].metric("Baseline LLM Prompt", f"{baseline_val:,} tokens" if isinstance(baseline_val, int) else f"{baseline_val} tokens")
-    cols[1].metric("Optimized LLM Prompt", f"{optimized_val:,} tokens" if isinstance(optimized_val, int) else f"{optimized_val} tokens")
-    cols[2].metric("Saved Prompt Tokens", f"{saved_val:,} tokens" if isinstance(saved_val, int) else f"{saved_val} tokens")
-    cols[3].metric("Saved %", f"{saved_pct}%")
-    
-    if is_new_format:
-        st.caption(
-            f"**Context alone:** Standard context was {result.token_savings.get('baseline_context_tokens', 0):,} tokens vs "
-            f"Graph-optimized context of {result.token_savings.get('optimized_context_tokens', 0):,} tokens "
-            f"(Context tokens reduced by **{result.token_savings.get('saved_context_percent', 0)}%**)."
-        )
-    else:
-        st.caption("Showing estimated context tokens (fallback for older records).")
-        
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Standard QA (No Graph)")
-        render_query_record(result.standard)
-    with right:
-        st.subheader("Graph-Optimized QA")
-        render_query_record(result.graph_optimized)
-
-
-def render_architecture_note() -> None:
-    with st.expander("What this public demo is doing"):
-        st.markdown(
-            textwrap.dedent(
-                """
-                This Streamlit app reuses the same Stage 1 engine:
-
-                - Tree-sitter parses Python files with real source spans.
-                - CodeGraph is built from Python AST relationships.
-                - Graphify is attempted through a local CLI and falls back transparently when unavailable.
-                - Token counts are labeled exact or estimated.
-                - Gemini calls use secrets or environment variables, never hardcoded keys.
-
-                On Streamlit Community Cloud, local storage is ephemeral. That is fine for a mentor demo, but a production version
-                should move artifacts to durable storage.
-                """
-            )
-        )
 
 
 def main() -> None:
-    st.title("Context Optimization Engine")
-    st.caption("Stage 1 public demo: Python repo ingestion, Tree-sitter, CodeGraph, Graphify, token accounting, Gemini QA.")
+    st.markdown(
+        '''
+        <h1 class="gradient-text" style="font-size:42px; margin: 0; padding-bottom: 5px; line-height: 1.2;">
+            Graph-Augmented Code Understanding
+        </h1>
+        <p style="font-size:15px; margin-top:8px; margin-bottom:24px; color: #9ca3af; font-weight: 500;">
+            Evaluate token consumption, query performance, and repository comprehension with and without graphs.
+        </p>
+        ''',
+        unsafe_allow_html=True,
+    )
 
     if "session_id" not in st.session_state:
         st.session_state.session_id = uuid4().hex
 
     repo = current_repo()
-    render_status(repo)
-    render_architecture_note()
 
     tab_names = [
         "Upload / Import",
-        "Repo Analysis",
-        "Tree-sitter",
         "CodeGraph",
         "Graphify",
         "Graph QA",
@@ -1129,18 +1022,14 @@ def main() -> None:
     ]
     tabs = st.tabs(tab_names)
     with tabs[0]:
-        render_upload_import()
+        render_upload_import(repo)
     with tabs[1]:
-        render_repo_analysis(repo)
-    with tabs[2]:
-        render_tree_sitter(repo)
-    with tabs[3]:
         render_graph(repo, "codegraph")
-    with tabs[4]:
+    with tabs[2]:
         render_graph(repo, "graphify")
-    with tabs[5]:
+    with tabs[3]:
         render_graph_qa(repo)
-    with tabs[6]:
+    with tabs[4]:
         render_tokens(repo)
 
 
