@@ -10,4 +10,4 @@ tiktoken==0.8.0
 google-genai==0.6.0
 httpx==0.28.1
 pytest==8.3.4
-graphifyy==0.8.18
+

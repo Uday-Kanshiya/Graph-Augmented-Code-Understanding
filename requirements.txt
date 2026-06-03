@@ -10,4 +10,4 @@ google-genai==0.6.0
 httpx==0.28.1
 streamlit==1.41.1
 pandas==2.2.3
-graphifyy==0.8.18
+
