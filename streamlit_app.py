@@ -742,68 +742,47 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                             frontier = next_frontier
                             
                     # Token-budget aware output: rank by relevance, cut at budget (~4 chars/token)
-                    char_budget = None
-                    if token_budget_val is not None:
-                        char_budget = token_budget_val * 4
-                        
-                    current_chars = 0
+                    def relevance(nid):
+                        label = G.nodes[nid].get('label', '').lower()
+                        return sum(1 for t in terms if t in label)
+
+                    ranked_nodes = sorted(subgraph_nodes, key=relevance, reverse=True)
+
+                    lines = [f'Traversal: {mode.upper()} | Start: {[G.nodes[n].get("label", n) for n in start_nodes]} | {len(subgraph_nodes)} nodes']
                     node_details = []
-                    selected_subgraph_nodes = []
-                    
-                    for nid in subgraph_nodes:
-                        nd = G.nodes[nid]
-                        lines_info = f" (Lines {nd.get('line_start')}-{nd.get('line_end')})" if nd.get('line_start') is not None else ""
-                        path_info = f"File: {nd.get('file_path')}{lines_info}" if nd.get('file_path') else "File: External"
-                        
-                        snippet_str = ""
-                        if nd.get('source_snippet'):
-                            snippet_str = f"\nSource Snippet:\n```python\n{nd.get('source_snippet')}\n```"
-                            
-                        meta_str = ""
-                        if nd.get('metadata'):
-                            meta_str = f"\nMetadata: {nd.get('metadata')}"
-                            
-                        node_str = (
-                            f"- **Node ID**: `{nid}`\n"
-                            f"  - **Type**: {nd.get('node_type', 'unknown')}\n"
-                            f"  - **Label**: {nd.get('label', 'unknown')}\n"
-                            f"  - **Location**: {path_info}"
-                            f"{meta_str}"
-                            f"{snippet_str}"
-                        )
-                        
-                        if char_budget is not None and current_chars + len(node_str) > char_budget:
-                            break
-                            
+                    for nid in ranked_nodes:
+                        d = G.nodes[nid]
+                        src = d.get("source_file") or d.get("file_path") or ""
+                        loc = d.get("source_location") or d.get("line_start") or ""
+                        node_str = f'  NODE {d.get("label", nid)} [src={src} loc={loc}]'
+                        lines.append(node_str)
                         node_details.append(node_str)
-                        selected_subgraph_nodes.append(nid)
-                        current_chars += len(node_str)
                         
                     edge_details = []
                     for u, v in subgraph_edges:
-                        if u in selected_subgraph_nodes and v in selected_subgraph_nodes:
-                            edata = G[u][v]
-                            u_label = G.nodes[u].get('label', u)
-                            v_label = G.nodes[v].get('label', v)
-                            rel = edata.get('edge_type', 'connected_to')
-                            edge_str = f"- `{u}` ({u_label}) -- **{rel}** --> `{v}` ({v_label})"
-                            
-                            if char_budget is not None and current_chars + len(edge_str) > char_budget:
-                                break
-                                
+                        if u in subgraph_nodes and v in subgraph_nodes:
+                            d = G[u][v]
+                            rel = d.get("relation") or d.get("edge_type") or "connected_to"
+                            conf = d.get("confidence") or d.get("score") or "1.0"
+                            edge_str = f'  EDGE {G.nodes[u].get("label", u)} --{rel} [{conf}]--> {G.nodes[v].get("label", v)}'
+                            lines.append(edge_str)
                             edge_details.append(edge_str)
-                            current_chars += len(edge_str)
-                            
-                    nodes_context = "\n\n".join(node_details)
-                    edges_context = "\n".join(edge_details)
-                    full_context = f"=== GRAPH NODES ===\n{nodes_context}\n\n=== GRAPH RELATIONSHIPS ===\n{edges_context}"
+
+                    output = '\n'.join(lines)
                     
+                    budget_exceeded = False
+                    if token_budget_val is not None:
+                        char_budget = token_budget_val * 4
+                        if len(output) > char_budget:
+                            output = output[:char_budget] + f'\n... (truncated at ~{token_budget_val} token budget - use --budget N for more)'
+                            budget_exceeded = True
+                            
                     prompt = (
                         "You are a graph-aware repository QA assistant. Use the following Graphify nodes and relationships to answer the question.\n"
                         "Cite files and lines when they are available in the node details. Answer using ONLY what the graph contains. Quote source locations when citing specific facts.\n"
                         "If the graph lacks enough information to answer, say so - do not hallucinate edges or facts.\n\n"
                         f"Question: {q_text}\n\n"
-                        f"Graph Context:\n{full_context}"
+                        f"Graph Context:\n{output}"
                     )
                     
                     response = llm_provider.generate_answer(prompt)
@@ -826,10 +805,10 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                         "notes": response.total_tokens.notes
                     }
                     st.session_state.graphify_qa_error = None
-                    st.session_state.graphify_qa_budget_exceeded = char_budget is not None and (len(subgraph_nodes) > len(selected_subgraph_nodes))
+                    st.session_state.graphify_qa_budget_exceeded = budget_exceeded
                     st.session_state.graphify_qa_budget_limit = token_budget_val
                     st.session_state.graphify_qa_total_discovered = len(subgraph_nodes)
-                    st.session_state.graphify_qa_total_included = len(selected_subgraph_nodes)
+                    st.session_state.graphify_qa_total_included = len(subgraph_nodes)
 
                     # Save query to storage so it shows in Token Analytics history
                     from app.models.schemas import TokenMeasurement, CountType
