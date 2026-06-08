@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.models.schemas import GraphDocument, GraphEdge, GraphNode, SourceSnippet, TokenMeasurement
@@ -56,41 +57,73 @@ class GraphRetrievalService:
             return self._fallback_context(repo_id)
 
         # Use the appropriate query service based on graph source
+        if source_selection == "merged" and graphify and codegraph:
+            graphify_result = self._build_context_for_graph(repo_id, query, max_nodes, graphify)
+            codegraph_result = self._build_context_for_graph(repo_id, query, max_nodes, codegraph)
+            merged_context = "\n\n---\n\n".join([graphify_result.context, codegraph_result.context])
+            merged_snippets = graphify_result.snippets + codegraph_result.snippets
+            merged_nodes = graphify_result.selected_nodes + codegraph_result.selected_nodes
+            merged_edges = graphify_result.selected_edges + codegraph_result.selected_edges
+            measurement = self.token_service.measure_estimated("codegraph_graphify_optimized_context", merged_context)
+            return GraphRetrievalResult(
+                context=merged_context,
+                snippets=merged_snippets,
+                selected_nodes=merged_nodes,
+                selected_edges=merged_edges,
+                token_measurement=measurement,
+            )
+
+        if source_selection == "merged":
+            graph = graphify or codegraph
+
+        graph_context = self._build_context_for_graph(repo_id, query, max_nodes, graph)
+        return graph_context
+
+    def _build_context_for_graph(self, repo_id: str, query: str, max_nodes: int, graph: GraphDocument) -> GraphRetrievalResult:
         if graph.source == "graphify":
-            # Prefer external Graphify CLI for queries (no Python-side selection).
-            # Run `graphify query <query>` in the repository source directory and use
-            # the CLI output as the context sent to the LLM. If the CLI fails,
-            # fall back to the internal Python query implementation.
             selected_nodes, selected_edges = [], []
-            try:
-                repo_root = self.storage.repo_source_dir(repo_id)
-                proc = subprocess.run(
-                    ["graphify", "query", query],
-                    cwd=str(repo_root),
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                cli_output = proc.stdout.strip() or proc.stderr.strip()
-                if cli_output:
-                    # Build a simple context text from CLI output; LLM will parse/explain it.
-                    context_text = f"Graphify CLI output for query: {query}\n\n{cli_output}"
-                    measurement = self.token_service.measure_estimated(
-                        "codegraph_graphify_optimized_context", context_text
+            graphify_cli_available = False
+            if graph.raw_output_path:
+                raw_path = Path(graph.raw_output_path)
+                if not raw_path.is_absolute():
+                    raw_path = self.storage.repo_source_dir(repo_id) / raw_path
+
+                if raw_path.exists():
+                    if raw_path.is_file() and raw_path.name == "graph.json":
+                        graphify_cli_available = True
+                    elif raw_path.is_dir() and (raw_path / "graph.json").exists():
+                        graphify_cli_available = True
+                    elif (raw_path / "graph.json").exists():
+                        graphify_cli_available = True
+
+            if graphify_cli_available:
+                try:
+                    repo_root = self.storage.repo_source_dir(repo_id)
+                    proc = subprocess.run(
+                        ["graphify", "query", query],
+                        cwd=str(repo_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
                     )
-                    return GraphRetrievalResult(
-                        context=context_text,
-                        snippets=[SourceSnippet(file_path="graphify:cli", line_start=0, line_end=0, text=cli_output, source="graphify_cli")],
-                        selected_nodes=[],
-                        selected_edges=[],
-                        token_measurement=measurement,
-                    )
-            except Exception:
-                # CLI unavailable or failed; fall back to internal query
-                selected_nodes, selected_edges = self.graphify_service.query(graph, query, max_nodes)
+                    cli_output = proc.stdout.strip() or proc.stderr.strip()
+                    if cli_output:
+                        context_text = f"Graphify CLI output for query: {query}\n\n{cli_output}"
+                        measurement = self.token_service.measure_estimated(
+                            "codegraph_graphify_optimized_context", context_text
+                        )
+                        return GraphRetrievalResult(
+                            context=context_text,
+                            snippets=[SourceSnippet(file_path="graphify:cli", line_start=0, line_end=0, text=cli_output, source="graphify_cli")],
+                            selected_nodes=[],
+                            selected_edges=[],
+                            token_measurement=measurement,
+                        )
+                except Exception:
+                    pass
+
+            selected_nodes, selected_edges = self.graphify_service.query(graph, query, max_nodes)
         else:
-            # Prefer external CodeGraph (Node.js) integration for CodeGraph queries.
-            # We write a small temporary Node script into the repo root and run it with `node`.
             selected_nodes, selected_edges = [], []
             try:
                 repo_root = self.storage.repo_source_dir(repo_id)
@@ -111,7 +144,6 @@ class GraphRetrievalService:
                 })();
                 """ % (max_nodes)
 
-                # Write to a temp file in the repo root so CodeGraph can open the project easily
                 script_path = repo_root / ".codegraph_query.js"
                 script_path.write_text(script, encoding="utf-8")
                 proc = subprocess.run(
@@ -130,7 +162,6 @@ class GraphRetrievalService:
                         measurement = self.token_service.measure_estimated(
                             "codegraph_graphify_optimized_context", context_text
                         )
-                        # Clean up script file
                         try:
                             script_path.unlink()
                         except Exception:
@@ -143,7 +174,6 @@ class GraphRetrievalService:
                             token_measurement=measurement,
                         )
                     except json.JSONDecodeError:
-                        # Not JSON; use raw output
                         cli_output = stdout
                         context_text = f"CodeGraph CLI output for query: {query}\n\n{cli_output}"
                         measurement = self.token_service.measure_estimated(
@@ -161,9 +191,8 @@ class GraphRetrievalService:
                             token_measurement=measurement,
                         )
             except Exception:
-                # Node/CodeGraph CLI unavailable or failed; fall back to internal Python query
                 selected_nodes, selected_edges = self.codegraph_service.query(graph, query, max_nodes)
-    
+
         snippets = [self._node_to_snippet(node) for node in selected_nodes if node.source_snippet]
         context_text = self._build_graph_context_text(query, selected_nodes, selected_edges)
         measurement = self.token_service.measure_estimated("codegraph_graphify_optimized_context", context_text)

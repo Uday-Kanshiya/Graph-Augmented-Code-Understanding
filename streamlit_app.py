@@ -10,6 +10,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import streamlit as st
+import networkx as nx
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = PROJECT_ROOT / "backend"
@@ -603,396 +605,327 @@ def render_tokens(repo: RepoMetadata | None) -> None:
             avg_pct = (total_saved / total_baseline * 100) if total_baseline else 0
             
             st.markdown("#### 📈 Cumulative Savings Against Whole Codebase Baseline")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Baseline Tokens", f"{total_baseline:,}")
-            c2.metric("Total Optimized Tokens", f"{total_graph:,}")
-            c3.metric("Total Tokens Saved", f"{total_saved:,}")
-            c4.metric("Avg. Token Savings %", f"{round(avg_pct, 2)}%")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Usage", f"{total_graph:,}")
+            c2.metric("Total Req for Raw Input", f"{total_baseline:,}")
+            c3.metric("% Saved", f"{round(avg_pct, 2)}%")
         else:
-            st.info("Ask a question in **Graph QA** to see direct query-by-query token savings here!")
+            st.info("Ask a question in **Graphify QA** to see direct query-by-query token savings here!")
             
         # "All Query History & Token Usage" section removed as requested.
     else:
-        st.info("No queries have been run in this session yet. Go to Graph QA to ask a question!")
+        st.info("No queries have been run in this session yet. Go to Graphify QA to ask a question!")
 
     # Static ingestion & parsing pipeline measurements removed per user request.
 
 
-def parse_and_render_code_fix(answer_text: str, repo_id: str) -> None:
-    if not answer_text:
-        st.markdown("_No answer generated._")
-        return
-        
-    # Regex to extract <code_fix>...</code_fix>
-    match = re.search(r"<code_fix>(.*?)</code_fix>", answer_text, re.DOTALL)
-    if not match:
-        st.markdown(answer_text)
-        return
-        
-    # Exclude the code_fix tags from the conversational output
-    conversation_text = answer_text.replace(match.group(0), "").strip()
-    if conversation_text:
-        st.markdown(conversation_text)
-        
-    # Parse inner XML tags
-    inner = match.group(1)
-    file_match = re.search(r"<filepath>(.*?)</filepath>", inner, re.DOTALL)
-    orig_match = re.search(r"<original_code>(.*?)</original_code>", inner, re.DOTALL)
-    repl_match = re.search(r"<replacement_code>(.*?)</replacement_code>", inner, re.DOTALL)
-    
-    if not file_match or not orig_match or not repl_match:
-        st.warning("⚠️ A code fix was proposed but could not be parsed completely.")
-        return
-        
-    filepath = file_match.group(1).strip()
-    original_code = orig_match.group(1)
-    if original_code.startswith("\n"):
-        original_code = original_code[1:]
-    if original_code.endswith("\n"):
-        original_code = original_code[:-1]
-        
-    replacement_code = repl_match.group(1)
-    if replacement_code.startswith("\n"):
-        replacement_code = replacement_code[1:]
-    if replacement_code.endswith("\n"):
-        replacement_code = replacement_code[:-1]
-        
-    st.markdown("---")
-    st.markdown(f"#### 🛠️ Proposed Fix for `{filepath}`")
-    
-    # Compute unified diff
-    orig_lines = original_code.splitlines()
-    repl_lines = replacement_code.splitlines()
-    diff_generator = difflib.unified_diff(
-        orig_lines, 
-        repl_lines, 
-        fromfile=f"a/{filepath}", 
-        tofile=f"b/{filepath}", 
-        lineterm=""
-    )
-    diff_text = "\n".join(list(diff_generator))
-    
-    st.code(diff_text, language="diff", line_numbers=True)
-    
-    # Render Apply Fix button
-    button_key = f"apply_fix_btn_{hashlib.md5(filepath.encode()).hexdigest()}"
-    if st.button("📁 Apply Fix directly to Workspace", key=button_key, type="primary"):
-        with st.spinner("Applying codebase changes and re-ingesting..."):
-            res = chat_service.apply_rectification(
-                repo_id=repo_id,
-                file_path=filepath,
-                original_code=original_code,
-                replacement_code=replacement_code
-            )
-            if res.get("status") == "success":
-                st.success(res.get("message"))
-                st.balloons()
-                st.info("🔄 Repository has been successfully re-indexed in the background! Ask another question to see the updated graph.")
-            else:
-                st.error(f"❌ Error applying fix: {res.get('error')}")
-
-
-def subgraph_to_dot(record: QueryRecord) -> str:
-    nodes = record.selected_nodes
-    edges = record.selected_edges
-    
-    lines = [
-        "digraph G {", 
-        "rankdir=LR;", 
-        "bgcolor=transparent;",
-        'node [shape=box, style="rounded,filled", fontname="Plus Jakarta Sans", fontsize=10];',
-        'edge [fontname="Plus Jakarta Sans", fontsize=8, penwidth=1.2];'
-    ]
-    
-    # Identify which nodes are anchors based on source snippets
-    anchor_keys = set()
-    for snippet in record.source_snippets:
-        if snippet.source == "graph_anchor":
-            anchor_keys.add((snippet.file_path, snippet.line_start))
-            
-    # Render nodes with distinct color highlights
-    for node in nodes:
-        is_anchor = (node.file_path, node.line_start) in anchor_keys
-        node_id_escaped = node.node_id.replace('"', "'")
-        label = f"[{node.node_type.upper()}]\\n{node.label}".replace('"', "'")
-        
-        if is_anchor:
-            # Gold/amber premium outline for Primary Anchors (full bodies)
-            lines.append(
-                f'"{node_id_escaped}" [label="{label}", fillcolor="#fef3c7", color="#f59e0b", fontcolor="#1e293b", penwidth=2.5];'
-            )
-        else:
-            # Sleek slate gray outline for Neighbor Nodes (signatures)
-            lines.append(
-                f'"{node_id_escaped}" [label="{label}", fillcolor="#111827", color="#4b5563", fontcolor="#cbd5e1", penwidth=1.5];'
-            )
-            
-    # Render edges
-    visible_node_ids = {node.node_id for node in nodes}
-    for edge in edges:
-        if edge.source_node in visible_node_ids and edge.target_node in visible_node_ids:
-            label = edge.edge_type.replace('"', "'")
-            lines.append(
-                f'"{edge.source_node}" -> "{edge.target_node}" [label="{label}", color="#6366f1", fontcolor="#9ca3af"];'
-            )
-            
-    lines.append("}")
-    return "\n".join(lines)
-
-
-def render_query_record(record: QueryRecord) -> None:
-    if record.error:
-        st.error(record.error)
-    st.caption(f"{record.status} | {record.latency_ms} ms | query_id={record.query_id}")
-    parse_and_render_code_fix(record.answer, record.repo_id)
-
-    
-    # Calculate Token and Context Size Analytics
-    baseline_prompt = record.token_usage.get("whole_codebase_baseline")
-    optimized_prompt = record.token_usage.get("llm_prompt_tokens")
-    response_tokens = record.token_usage.get("llm_response_tokens")
-    
-    baseline_count = baseline_prompt.tokens if baseline_prompt else 0
-    optimized_count = optimized_prompt.tokens if optimized_prompt else 0
-    response_count = response_tokens.tokens if response_tokens else 0
-    
-    saved_tokens = max(0, baseline_count - optimized_count)
-    saved_percent = round((saved_tokens / baseline_count * 100), 1) if baseline_count else 0.0
-    
-    st.markdown("---")
-    st.subheader("📊 Token & Context Size Savings Analysis")
-    
-    if baseline_count > 0:
-        cols = st.columns(4)
-        cols[0].metric(
-            "General Baseline", 
-            f"{baseline_count:,} tokens",
-            help="Total prompt tokens required if you uploaded the entire codebase folder directly to the LLM."
-        )
-        cols[1].metric(
-            "Optimized Graph", 
-            f"{optimized_count:,} tokens",
-            help="Actual prompt tokens sent using your PageRank Hybrid Retrieval graph optimization."
-        )
-        cols[2].metric(
-            "Net Input Saved", 
-            f"{saved_tokens:,} tokens", 
-            f"-{saved_percent}%" if saved_percent > 0 else "0.0%",
-            help="Absolute and percentage reduction in LLM prompt (input) tokens."
-        )
-        cols[3].metric(
-            "LLM Output Tokens", 
-            f"{response_count:,} tokens",
-            help="Actual response tokens generated by Gemini to answer your question."
-        )
-    else:
-        st.info("Ingesting token summary... Ask a question to compute complete savings metrics!")
-        
-    with st.expander("🔍 Detailed Token Breakdown"):
-        st.markdown(
-            f"""
-            * **General Chatbot Baseline (Whole Codebase):** `{baseline_count:,}` tokens
-            * **Our Optimized Graph QA (Actual):** `{optimized_count:,}` tokens
-            * **Net Input Tokens Saved:** `{saved_tokens:,}` tokens (**{saved_percent}% prompt size reduction**!)
-            * **LLM Response Output size:** `{response_count:,}` tokens
-            
-            This means your PageRank Hybrid Retrieval algorithm saved **{saved_tokens:,} input tokens** on this single query!
-            """
-        )
-        st.dataframe([value.model_dump() for value in record.token_usage.values()], use_container_width=True, hide_index=True)
-
-    if record.selected_nodes:
-        counts = graph_node_source_counts(record)
-        cols = st.columns(3)
-        cols[0].metric("CodeGraph nodes", counts["codegraph"])
-        cols[1].metric("Native Graphify nodes", counts["graphify"])
-        cols[2].metric("Fallback Graphify nodes", counts["graphify_fallback"])
-        
-        # Build raw text blocks passed to the prompt
-        node_lines = [
-            f"- {node.node_id} [{node.node_type}] {node.label} ({node.file_path or 'external'}:{node.line_start or '-'})"
-            for node in record.selected_nodes
-        ]
-        edge_lines = [
-            f"- {edge.source_node} --{edge.edge_type}--> {edge.target_node}"
-            for edge in record.selected_edges
-        ]
-        snippet_lines = [
-            f"### {snippet.file_path}:{snippet.line_start}-{snippet.line_end} ({snippet.source})\n{snippet.text}"
-            for snippet in record.source_snippets
-        ]
-        exact_context = "\n".join(
-            [
-                "Graph-selected nodes:",
-                *node_lines,
-                "",
-                "Graph relationships:",
-                *edge_lines,
-                "",
-                "Source snippets:",
-                *snippet_lines,
-            ]
-        )
-        
-        with st.expander("📄 View Exact Context Passed to LLM", expanded=False):
-            t1, t2 = st.tabs(["📝 Context Text Block Only", "🚀 Complete Raw LLM Prompt Ingested"])
-            with t1:
-                st.markdown(
-                    "This is the exact, optimized context text block that was appended to the LLM prompt "
-                    "using your PageRank Hybrid Retrieval algorithm:"
-                )
-                st.text_area("LLM Prompt Context Text", exact_context, height=350)
-            with t2:
-                st.markdown(
-                    "This is the **entire raw prompt** received by the Gemini model, including "
-                    "system role guidelines, automated code rectifier instructions, your question, and the context block:"
-                )
-                rectify_str = ""
-                if st.session_state.get("rectify_enabled", False):
-                    rectify_str = (
-                        "\n\nIMPORTANT: If you identify any bug/error and propose a code change, you MUST wrap the proposed fix exactly in "
-                        "the following XML structure so the system can apply it automatically:\n"
-                        "<code_fix>\n"
-                        "  <filepath>relative/path/to/file.py</filepath>\n"
-                        "  <original_code>\n"
-                        "// Exact block of old code to replace (must match precisely including spacing)\n"
-                        "  </original_code>\n"
-                        "  <replacement_code>\n"
-                        "// Exact block of new code to insert\n"
-                        "  </replacement_code>\n"
-                        "</code_fix>\n"
-                        "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
-                    )
-                full_raw_prompt = (
-                    "You are a graph-aware repository QA assistant. Use the selected CodeGraph and Graphify nodes, "
-                    "relationships, and snippets to answer. Prefer precise relationships over broad guesses. "
-                    "Cite files, lines, and relevant graph nodes. If the graph context is insufficient, say so. "
-                    "Be extremely concise, direct, and brief in your answer. Avoid verbose explanations."
-                    f"{rectify_str}\n\n"
-                    f"Question:\n{record.query}\n\n"
-                    f"Optimized graph context:\n{exact_context}"
-                )
-                st.text_area("Gemini Final Prompt", full_raw_prompt, height=450)
-
-        # Graphical Subgraph Neighborhood representation
-        st.markdown("#### 🗺️ Context Neighborhood Map")
-        st.caption("Selected structural neighborhood map for this query. Primary Anchors (Full context) are highlighted in **yellow/orange**, and Neighbor Nodes (Signature context) are in **gray**.")
-        dot = subgraph_to_dot(record)
-        st.graphviz_chart(dot, use_container_width=True)
-
-        with st.expander("Selected Graph Nodes"):
-            st.dataframe([node.model_dump() for node in record.selected_nodes], use_container_width=True, hide_index=True)
-
-        with st.expander("Selected Graph Edges"):
-            if record.selected_edges:
-                st.dataframe([edge.model_dump() for edge in record.selected_edges], use_container_width=True, hide_index=True)
-            else:
-                st.info("No graph edges were selected for this query.")
-            
-    with st.expander("Source Snippets", expanded=True):
-        for snippet in record.source_snippets:
-            st.caption(f"{snippet.file_path}:{snippet.line_start}-{snippet.line_end} | {snippet.source}")
-            st.code(snippet.text, language="python", line_numbers=True)
 
 
 
-
-def graph_node_source_counts(record: QueryRecord) -> dict[str, int]:
-    counts = {"codegraph": 0, "graphify": 0, "graphify_fallback": 0}
-    for node in record.selected_nodes:
-        is_graphify = (
-            node.node_id.startswith("graphify:") or 
-            (node.metadata and (
-                node.metadata.get("merged_from_graphify") is True or
-                node.metadata.get("graphify_processed") is True
-            ))
-        )
-        is_fallback = (
-            node.node_id.startswith("graphify-fallback:") or 
-            (node.metadata and node.metadata.get("fallback") is True)
-        )
-        
-        if is_fallback:
-            counts["graphify_fallback"] += 1
-        elif is_graphify:
-            counts["graphify"] += 1
-            
-        if node.node_id.startswith("codegraph:") or is_graphify:
-            counts["codegraph"] += 1
-    return counts
-
-
-def qa_prompt_help() -> str:
-    return "Ask about architecture, important functions, call paths, classes, imports, or implementation behavior."
-
-
-def render_graph_qa(repo: RepoMetadata | None) -> None:
-    st.header("Graph-Optimized Repo QA")
+def render_graphify_qa(repo: RepoMetadata | None) -> None:
+    st.header("Graphify QA")
     if not repo:
         st.info("Load a repository first.")
         return
-    codegraph = storage.load_codegraph(repo.repo_id)
-    graphify = storage.load_graphify(repo.repo_id)
-    codegraph_count = len(codegraph.nodes) if codegraph else 0
-    graphify_count = len(graphify.nodes) if graphify else 0
+        
+    graph = storage.load_graphify(repo.repo_id)
+    if not graph or not graph.nodes:
+        st.error("No Graphify graph found. Please build or import a repository with Graphify output first.")
+        return
+        
 
-    st.caption(
-        f"Graph QA uses a single selected graph source. Choose CodeGraph or Graphify. "
-        f"If the chosen source is unavailable, the app will report it instead of falling back."
-    )
-    st.info(
-        f"Available sources: CodeGraph = {codegraph_count} nodes, Graphify = {graphify_count} nodes."
-    )
-
-    source_label = st.selectbox(
-        "Retrieve Graph Context from:",
-        ["CodeGraph", "Graphify"],
-        index=0,
-        key="graph_source_select"
-    )
-    source_selection = "codegraph" if "CodeGraph" in source_label else "graphify"
-
-    budget_label = st.selectbox(
-        "Context Size Budget:",
-        ["Balanced (Recommended)", "Tight (Token Saver)", "Deep (Large Codebase Coverage)"],
-        index=0,
-        help="Adjust context bounds: Balanced is ideal for normal use, Tight minimizes token cost, and Deep is suited for large repositories with many files."
-    )
     
-    if budget_label == "Tight (Token Saver)":
-        st.session_state.graph_max_nodes = 8
-    elif budget_label == "Deep (Large Codebase Coverage)":
-        st.session_state.graph_max_nodes = 24
-    else: # Balanced
-        st.session_state.graph_max_nodes = 14
+    left, right = st.columns([3, 1])
+    with left:
+        question = st.text_area("Ask a question about codebase architecture:", placeholder="e.g. 'How is TokenService connected to standard QA?'", key="graphify_qa_question")
+    with right:
+        mode_selection = st.radio(
+            "Traversal Strategy:",
+            ["BFS (Broad Context)", "DFS (Deep Chain)"],
+            index=0,
+            help="BFS finds broad nearest neighbors. DFS traces deep connection chains."
+        )
+        token_budget_input = st.text_input(
+            "Max Token Usage (Budget):",
+            placeholder="e.g. 2000",
+            help="Limits context details sent to the LLM. If empty, no limit is applied."
+        )
+        
+    token_budget_val = None
+    if token_budget_input.strip():
+        try:
+            token_budget_val = int(token_budget_input.strip())
+        except ValueError:
+            st.warning("Please enter a valid integer for the token budget.")
+            
+    if st.button("Ask Graphify QA", disabled=not question.strip(), type="primary"):
+        with st.spinner("Traversing graph and calling LLM..."):
+            started = time.perf_counter()
+            try:
+                G = nx.Graph()
+                for node in graph.nodes:
+                    G.add_node(
+                        node.node_id,
+                        label=node.label,
+                        node_type=node.node_type,
+                        file_path=node.file_path,
+                        line_start=node.line_start,
+                        line_end=node.line_end,
+                        source_snippet=node.source_snippet,
+                        metadata=node.metadata
+                    )
+                for edge in graph.edges:
+                    G.add_edge(
+                        edge.source_node,
+                        edge.target_node,
+                        edge_type=edge.edge_type,
+                        edge_id=edge.edge_id,
+                        score=edge.score,
+                        metadata=edge.metadata
+                    )
+                
+                q_text = question.strip()
+                terms = [t.lower() for t in q_text.split() if len(t) > 3]
+                
+                scored = []
+                for nid, ndata in G.nodes(data=True):
+                    label = ndata.get('label', '').lower()
+                    score = sum(1 for t in terms if t in label)
+                    if score > 0:
+                        scored.append((score, nid))
+                scored.sort(reverse=True)
+                start_nodes = [nid for _, nid in scored[:3]]
+                
+                if not start_nodes:
+                    st.session_state.graphify_qa_error = f"No matching starting nodes found for query terms: {terms}"
+                    st.session_state.graphify_qa_answer = None
+                    st.session_state.graphify_qa_nodes = []
+                    st.session_state.graphify_qa_edges = []
+                    st.session_state.graphify_qa_start_nodes = []
+                    st.session_state.graphify_qa_tokens = None
+                    st.session_state.graphify_qa_budget_exceeded = False
+                else:
+                    mode = "dfs" if "DFS" in mode_selection else "bfs"
+                    subgraph_nodes = []
+                    subgraph_edges = []
+                    
+                    if mode == "dfs":
+                        visited = set()
+                        stack = [(n, 0) for n in reversed(start_nodes)]
+                        while stack:
+                            node, depth = stack.pop()
+                            if node in visited or depth > 6:
+                                continue
+                            visited.add(node)
+                            subgraph_nodes.append(node)
+                            if not G.has_node(node):
+                                continue
+                            for neighbor in G.neighbors(node):
+                                if neighbor not in visited:
+                                    stack.append((neighbor, depth + 1))
+                                    subgraph_edges.append((node, neighbor))
+                    else:
+                        frontier = set(start_nodes)
+                        subgraph_nodes = list(start_nodes)
+                        visited = set(start_nodes)
+                        for _ in range(3):
+                            next_frontier = set()
+                            for n in frontier:
+                                if not G.has_node(n):
+                                    continue
+                                for neighbor in G.neighbors(n):
+                                    if neighbor not in visited:
+                                        visited.add(neighbor)
+                                        next_frontier.add(neighbor)
+                                        subgraph_nodes.append(neighbor)
+                                        subgraph_edges.append((n, neighbor))
+                            frontier = next_frontier
+                            
+                    # Token-budget aware output: rank by relevance, cut at budget (~4 chars/token)
+                    char_budget = None
+                    if token_budget_val is not None:
+                        char_budget = token_budget_val * 4
+                        
+                    current_chars = 0
+                    node_details = []
+                    selected_subgraph_nodes = []
+                    
+                    for nid in subgraph_nodes:
+                        nd = G.nodes[nid]
+                        lines_info = f" (Lines {nd.get('line_start')}-{nd.get('line_end')})" if nd.get('line_start') is not None else ""
+                        path_info = f"File: {nd.get('file_path')}{lines_info}" if nd.get('file_path') else "File: External"
+                        
+                        snippet_str = ""
+                        if nd.get('source_snippet'):
+                            snippet_str = f"\nSource Snippet:\n```python\n{nd.get('source_snippet')}\n```"
+                            
+                        meta_str = ""
+                        if nd.get('metadata'):
+                            meta_str = f"\nMetadata: {nd.get('metadata')}"
+                            
+                        node_str = (
+                            f"- **Node ID**: `{nid}`\n"
+                            f"  - **Type**: {nd.get('node_type', 'unknown')}\n"
+                            f"  - **Label**: {nd.get('label', 'unknown')}\n"
+                            f"  - **Location**: {path_info}"
+                            f"{meta_str}"
+                            f"{snippet_str}"
+                        )
+                        
+                        if char_budget is not None and current_chars + len(node_str) > char_budget:
+                            break
+                            
+                        node_details.append(node_str)
+                        selected_subgraph_nodes.append(nid)
+                        current_chars += len(node_str)
+                        
+                    edge_details = []
+                    for u, v in subgraph_edges:
+                        if u in selected_subgraph_nodes and v in selected_subgraph_nodes:
+                            edata = G[u][v]
+                            u_label = G.nodes[u].get('label', u)
+                            v_label = G.nodes[v].get('label', v)
+                            rel = edata.get('edge_type', 'connected_to')
+                            edge_str = f"- `{u}` ({u_label}) -- **{rel}** --> `{v}` ({v_label})"
+                            
+                            if char_budget is not None and current_chars + len(edge_str) > char_budget:
+                                break
+                                
+                            edge_details.append(edge_str)
+                            current_chars += len(edge_str)
+                            
+                    nodes_context = "\n\n".join(node_details)
+                    edges_context = "\n".join(edge_details)
+                    full_context = f"=== GRAPH NODES ===\n{nodes_context}\n\n=== GRAPH RELATIONSHIPS ===\n{edges_context}"
+                    
+                    prompt = (
+                        "You are a graph-aware repository QA assistant. Use the following Graphify nodes and relationships to answer the question.\n"
+                        "Cite files and lines when they are available in the node details. Answer using ONLY what the graph contains. Quote source locations when citing specific facts.\n"
+                        "If the graph lacks enough information to answer, say so - do not hallucinate edges or facts.\n\n"
+                        f"Question: {q_text}\n\n"
+                        f"Graph Context:\n{full_context}"
+                    )
+                    
+                    response = llm_provider.generate_answer(prompt)
+                    
+                    st.session_state.graphify_qa_answer = response.text
+                    st.session_state.graphify_qa_nodes = node_details
+                    st.session_state.graphify_qa_edges = edge_details
+                    st.session_state.graphify_qa_start_nodes = start_nodes
+                    st.session_state.graphify_qa_prompt = prompt
+                    repo_tokens = chat_service._get_total_repo_tokens(repo.repo_id)
+                    query_prompt = chat_service._standard_prompt(q_text, "[concatenated_files_placeholder]")
+                    query_tokens = chat_service._prompt_measurement(query_prompt).tokens
+                    raw_input_token_usage = repo_tokens + query_tokens
 
-    source_available = (source_selection == "codegraph" and codegraph_count > 0) or (
-        source_selection == "graphify" and graphify_count > 0
-    )
+                    st.session_state.graphify_qa_tokens = {
+                        "prompt": response.prompt_tokens.tokens,
+                        "response": response.response_tokens.tokens,
+                        "total": response.total_tokens.tokens,
+                        "raw_input": raw_input_token_usage,
+                        "notes": response.total_tokens.notes
+                    }
+                    st.session_state.graphify_qa_error = None
+                    st.session_state.graphify_qa_budget_exceeded = char_budget is not None and (len(subgraph_nodes) > len(selected_subgraph_nodes))
+                    st.session_state.graphify_qa_budget_limit = token_budget_val
+                    st.session_state.graphify_qa_total_discovered = len(subgraph_nodes)
+                    st.session_state.graphify_qa_total_included = len(selected_subgraph_nodes)
 
-    if not source_available:
-        st.error(f"{source_label} is not available for this repository.")
+                    # Save query to storage so it shows in Token Analytics history
+                    from app.models.schemas import TokenMeasurement, CountType
+                    token_usage = {
+                        "llm_prompt_tokens": TokenMeasurement(
+                            stage="llm_prompt_tokens",
+                            tokens=response.prompt_tokens.tokens,
+                            count_type=CountType.exact,
+                            provider="gemini",
+                            model=llm_provider.model,
+                        ),
+                        "llm_response_tokens": TokenMeasurement(
+                            stage="llm_response_tokens",
+                            tokens=response.response_tokens.tokens,
+                            count_type=CountType.exact,
+                            provider="gemini",
+                            model=llm_provider.model,
+                        ),
+                        "total_per_query_tokens": TokenMeasurement(
+                            stage="total_per_query_tokens",
+                            tokens=response.total_tokens.tokens,
+                            count_type=CountType.exact,
+                            provider="gemini",
+                            model=llm_provider.model,
+                        ),
+                        "whole_codebase_baseline": TokenMeasurement(
+                            stage="whole_codebase_baseline",
+                            tokens=raw_input_token_usage,
+                            count_type=CountType.exact if chat_service.token_service._encoding else CountType.estimated,
+                            provider="gemini",
+                            model=llm_provider.model,
+                            notes="Raw Input token usage baseline"
+                        )
+                    }
+                    record = QueryRecord(
+                        query_id=uuid4().hex,
+                        repo_id=repo.repo_id,
+                        session_id=st.session_state.session_id,
+                        mode="graph_optimized",
+                        query=q_text,
+                        status="completed",
+                        answer=response.text,
+                        error=None,
+                        source_snippets=[],
+                        selected_nodes=[],
+                        selected_edges=[],
+                        token_usage=token_usage,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                    storage.save_query(record)
+            except Exception as e:
+                st.session_state.graphify_qa_error = f"Error during QA generation: {e}"
+                st.session_state.graphify_qa_answer = None
+                st.session_state.graphify_qa_nodes = []
+                st.session_state.graphify_qa_edges = []
+                st.session_state.graphify_qa_start_nodes = []
+                st.session_state.graphify_qa_tokens = None
+                st.session_state.graphify_qa_budget_exceeded = False
+                st.session_state.graphify_qa_prompt = None
 
-    query = st.text_area("Question", placeholder=qa_prompt_help(), key="graph_query")
-    if st.button("Ask Graph QA", disabled=not query.strip() or not source_available, type="primary"):
-        if not source_available:
-            st.error(f"Cannot run Graph QA because {source_label} is unavailable.")
-        else:
-            with st.spinner("Selecting graph neighborhood and calling Gemini..."):
-                record = chat_service.graph_optimized_qa(
-                    repo.repo_id,
-                    query.strip(),
-                    st.session_state.session_id,
-                    source_selection=source_selection,
-                    max_nodes=st.session_state.get("graph_max_nodes", 8),
-                )
-                st.session_state.graph_record = record
-
-    if "graph_record" in st.session_state:
-        render_query_record(st.session_state.graph_record)
-
-
-
+    if st.session_state.get("graphify_qa_error"):
+        st.error(st.session_state.graphify_qa_error)
+        
+    if st.session_state.get("graphify_qa_answer"):
+        st.success("Answer synthesized successfully!")
+        
+        tokens_info = st.session_state.graphify_qa_tokens
+        if tokens_info:
+            cols = st.columns(3)
+            cols[0].metric("Current Token Usage", f"{tokens_info['prompt']:,}")
+            cols[1].metric("Raw Input Token Usage", f"{tokens_info['raw_input']:,}")
+            if tokens_info['raw_input'] > 0:
+                pct_reduction = 100 - (tokens_info['prompt'] / tokens_info['raw_input']) * 100
+                cols[2].metric("Token Reduction %", f"{round(pct_reduction, 2)}%")
+            else:
+                cols[2].metric("Token Reduction %", "0.00%")
+            
+        st.subheader("💡 Answer")
+        st.markdown(st.session_state.graphify_qa_answer)
+        
+        with st.expander("🔬 Retrieved Subgraph Details and Raw LLM Prompt", expanded=False):
+            st.markdown(f"**Identified Start Nodes (Matching Query Terms):** {', '.join([f'`{n}`' for n in st.session_state.graphify_qa_start_nodes])}")
+            
+            t1, t2, t3 = st.tabs(["📝 Selected Graph Nodes", "🔗 Selected Graph Edges", "📄 Raw Input"])
+            with t1:
+                st.markdown(f"**Retrieved {len(st.session_state.graphify_qa_nodes)} Nodes:**")
+                for node_str in st.session_state.graphify_qa_nodes:
+                    st.markdown(node_str)
+                    st.divider()
+            with t2:
+                st.markdown(f"**Retrieved {len(st.session_state.graphify_qa_edges)} Edges:**")
+                for edge_str in st.session_state.graphify_qa_edges:
+                    st.markdown(edge_str)
+            with t3:
+                st.markdown("**Exact Prompt Sent to LLM:**")
+                st.text_area("LLM Final Prompt", st.session_state.get("graphify_qa_prompt", ""), height=400)
 
 
 def main() -> None:
@@ -1017,7 +950,7 @@ def main() -> None:
         "Upload / Import",
         "CodeGraph",
         "Graphify",
-        "Graph QA",
+        "Graphify QA",
         "Token Analytics",
     ]
     tabs = st.tabs(tab_names)
@@ -1028,7 +961,7 @@ def main() -> None:
     with tabs[2]:
         render_graph(repo, "graphify")
     with tabs[3]:
-        render_graph_qa(repo)
+        render_graphify_qa(repo)
     with tabs[4]:
         render_tokens(repo)
 
