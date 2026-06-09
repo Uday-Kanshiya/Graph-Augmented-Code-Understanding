@@ -241,6 +241,24 @@ class ChatService:
                 "</code_fix>\n"
                 "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
             )
+            
+        import re
+        is_codegraph = "codegraph" in context.lower()
+        if is_codegraph:
+            cleaned_context = re.sub(r"Graphify query:[^\n]*\n?", "", context, flags=re.IGNORECASE)
+            cleaned_context = re.sub(r"Selected Graph Nodes:\n?", "", cleaned_context, flags=re.IGNORECASE)
+            cleaned_context = cleaned_context.strip()
+            
+            return (
+                "You are a graph-aware repository QA assistant. Use the selected CodeGraph nodes and relationships to answer the question. "
+                "Prefer precise relationships over broad guesses. "
+                "Cite files, lines, and relevant symbols. If the graph context is insufficient, say so. "
+                "Be extremely concise, direct, and brief in your answer. Avoid verbose explanations."
+                f"{rectify_str}\n\n"
+                f"Question:\n{query}\n\n"
+                f"{cleaned_context}"
+            )
+            
         return (
             "You are a graph-aware repository QA assistant. Use the selected Graphify nodes and relationships first, "
             "then fall back to CodeGraph details if needed. Prefer precise relationships over broad guesses. "
