@@ -91,6 +91,7 @@ class GraphifyService:
         # 1. Try running graphify CLI
         import subprocess
         import json
+        import sys
         
         json_path = repo_root / "graphify-out" / "graph.json"
         
@@ -185,9 +186,10 @@ class GraphifyService:
         cli_success = False
         proc_details = ""
         try:
-            # Run graphify . inside repo_root
+            # Run graphify . inside repo_root using sys.executable to bypass shell PATH resolution errors
+            cmd = f'"{sys.executable}" -m graphify .'
             proc = subprocess.run(
-                "graphify .",
+                cmd,
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,

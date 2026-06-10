@@ -241,7 +241,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
 
 @st.cache_resource
 def services():
-    # Force reload cache to apply the updated GraphifyService path walking and diagnostics
+    # Force reload cache to apply the updated GraphifyService python-m-graphify executable call
     data_dir_value = get_secret("CONTEXT_ENGINE_DATA_DIR") or os.getenv("CONTEXT_ENGINE_DATA_DIR")
     data_dir = Path(data_dir_value) if data_dir_value else PROJECT_ROOT / "data"
     if not data_dir.is_absolute():
