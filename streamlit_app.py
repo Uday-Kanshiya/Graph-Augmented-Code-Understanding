@@ -522,6 +522,360 @@ def render_graph_schematic(kind: str) -> None:
             )
 
 
+def generate_interactive_graph_html(graph: GraphDocument) -> str:
+    import json
+    
+    # Colors for different node types
+    color_map = {
+        "file": {"background": "#1e1b4b", "border": "#6366f1"},       # Indigo
+        "module": {"background": "#1e1b4b", "border": "#6366f1"},     # Indigo
+        "class": {"background": "#3b0764", "border": "#a855f7"},      # Purple
+        "component": {"background": "#3b0764", "border": "#a855f7"},  # Purple
+        "function": {"background": "#022c22", "border": "#10b981"},   # Emerald
+        "method": {"background": "#022c22", "border": "#10b981"},     # Emerald
+        "concept": {"background": "#451a03", "border": "#f59e0b"},     # Amber
+    }
+    default_color = {"background": "#0c4a6e", "border": "#0ea5e9"}    # Sky
+    
+    nodes_json_list = []
+    for node in graph.nodes:
+        # Get color based on node type
+        color = color_map.get(node.node_type.lower(), default_color)
+        
+        # Build node representation
+        node_dict = {
+            "id": node.node_id,
+            "label": node.label,
+            "title": f"[{node.node_type.upper()}] {node.label}",
+            "node_type": node.node_type,
+            "file_path": node.file_path,
+            "line_start": node.line_start,
+            "line_end": node.line_end,
+            "source_snippet": node.source_snippet,
+            "metadata": node.metadata or {},
+            "color": {
+                "background": color["background"],
+                "border": color["border"],
+                "highlight": {
+                    "background": color["border"],
+                    "border": "#ffffff"
+                },
+                "hover": {
+                    "background": color["border"],
+                    "border": color["border"]
+                }
+            }
+        }
+        nodes_json_list.append(node_dict)
+        
+    edges_json_list = []
+    for edge in graph.edges:
+        edges_json_list.append({
+            "from": edge.source_node,
+            "to": edge.target_node,
+            "label": edge.edge_type,
+            "title": f"{edge.edge_type} (score: {edge.score})",
+            "weight": edge.score,
+        })
+
+    nodes_json_str = json.dumps(nodes_json_list)
+    edges_json_str = json.dumps(edges_json_list)
+
+    html_template = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Interactive Graph View</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0b0f19;
+    color: #f3f4f6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #graph {
+    flex: 1;
+    height: 100%;
+  }
+  #sidebar {
+    width: 320px;
+    background: #111827;
+    border-left: 1px solid #1f2937;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 20px;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.4);
+  }
+  #search-wrap {
+    margin-bottom: 20px;
+  }
+  #search {
+    width: 100%;
+    background: #1f2937;
+    border: 1px solid #374151;
+    color: #f3f4f6;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  #search:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+  }
+  #search-results {
+    max-height: 150px;
+    overflow-y: auto;
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    margin-top: 5px;
+    display: none;
+  }
+  .search-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    border-bottom: 1px solid #1f2937;
+  }
+  .search-item:hover {
+    background: #374151;
+  }
+  #info-panel {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+  .card {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+  .card-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9ca3af;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .card-value {
+    font-size: 15px;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+  pre {
+    background: #0b0f19;
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    border: 1px solid #1f2937;
+    margin-top: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .empty {
+    color: #6b7280;
+    font-style: italic;
+    text-align: center;
+    margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="sidebar">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search symbols..." autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <div id="info-panel">
+    <div class="empty">Click on a node to view detailed architectural signatures.</div>
+  </div>
+</div>
+
+<script>
+  const nodesData = __NODES_PLACEHOLDER__;
+  const edgesData = __EDGES_PLACEHOLDER__;
+
+  const nodes = new vis.DataSet(nodesData);
+  const edges = new vis.DataSet(edgesData);
+
+  const container = document.getElementById('graph');
+  const data = { nodes, edges };
+  
+  const options = {
+    nodes: {
+      shape: 'dot',
+      size: 16,
+      font: {
+        color: '#f3f4f6',
+        size: 12,
+        face: 'system-ui'
+      },
+      borderWidth: 2,
+      shadow: true
+    },
+    edges: {
+      width: 1.5,
+      color: { color: '#4b5563', highlight: '#6366f1', hover: '#818cf8' },
+      arrows: { to: { enabled: true, scaleFactor: 0.8 } },
+      smooth: { type: 'continuous', roundness: 0.5 },
+      shadow: true
+    },
+    physics: {
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -50,
+        centralGravity: 0.01,
+        springLength: 100,
+        springConstant: 0.08
+      },
+      stabilization: { iterations: 100 }
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 200,
+      navigationButtons: true,
+      keyboard: true
+    }
+  };
+
+  const network = new vis.Network(container, data, options);
+
+  const searchInput = document.getElementById('search');
+  const searchResults = document.getElementById('search-results');
+
+  searchInput.addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase().trim();
+    if (!query) {
+      searchResults.style.display = 'none';
+      return;
+    }
+    const matches = nodesData.filter(n => 
+      n.label.toLowerCase().includes(query) || 
+      n.id.toLowerCase().includes(query)
+    ).slice(0, 10);
+
+    if (matches.length > 0) {
+      searchResults.innerHTML = matches.map(n => 
+        `<div class="search-item" data-id="${n.id}">${n.label} <span style="font-size: 10px; color: #6b7280;">(${n.node_type})</span></div>`
+      ).join('');
+      searchResults.style.display = 'block';
+    } else {
+      searchResults.innerHTML = '<div class="search-item" style="color: #6b7280; cursor: default;">No symbols found</div>';
+      searchResults.style.display = 'block';
+    }
+  });
+
+  searchResults.addEventListener('click', (e) => {
+    const item = e.target.closest('.search-item');
+    if (!item || !item.dataset.id) return;
+    const nodeId = item.dataset.id;
+    
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.2, animation: true });
+    showNodeDetails(nodeId);
+    
+    searchInput.value = '';
+    searchResults.style.display = 'none';
+  });
+
+  network.on("selectNode", function (params) {
+    if (params.nodes.length > 0) {
+      showNodeDetails(params.nodes[0]);
+    }
+  });
+
+  network.on("deselectNode", function () {
+    document.getElementById('info-panel').innerHTML = 
+      '<div class="empty">Click on a node to view detailed architectural signatures.</div>';
+  });
+
+  function showNodeDetails(nodeId) {
+    const node = nodesData.find(n => n.id === nodeId);
+    if (!node) return;
+
+    let metaHtml = '';
+    if (node.metadata) {
+      for (const [key, value] of Object.entries(node.metadata)) {
+        if (typeof value === 'object') {
+          metaHtml += `
+            <div class="card">
+              <div class="card-title">${key}</div>
+              <pre>${JSON.stringify(value, null, 2)}</pre>
+            </div>`;
+        } else {
+          metaHtml += `
+            <div class="card">
+              <div class="card-title">${key}</div>
+              <div class="card-value">${value}</div>
+            </div>`;
+        }
+      }
+    }
+
+    let codeHtml = '';
+    if (node.source_snippet) {
+      codeHtml = `
+        <div class="card">
+          <div class="card-title">Source Snippet</div>
+          <pre>${escapeHtml(node.source_snippet)}</pre>
+        </div>`;
+    }
+
+    document.getElementById('info-panel').innerHTML = `
+      <div class="card">
+        <div class="card-title">Symbol Name</div>
+        <h2 style="font-size: 18px; font-weight: 700; color: #fff;">${node.label}</h2>
+        <span class="badge" style="background: ${node.color.border}; color: #fff;">${node.node_type}</span>
+      </div>
+      <div class="card">
+        <div class="card-title">File path</div>
+        <div class="card-value" style="font-family: monospace; font-size: 12px; color: #a5b4fc;">${node.file_path || 'External/Built-in'}</div>
+        ${node.line_start ? `<div style="font-size: 12px; color: #9ca3af; margin-top: 4px;">Line range: ${node.line_start} - ${node.line_end || node.line_start}</div>` : ''}
+      </div>
+      ${codeHtml}
+      ${metaHtml}
+    `;
+  }
+
+  function escapeHtml(text) {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+</script>
+</body>
+</html>
+"""
+    return html_template.replace("__NODES_PLACEHOLDER__", nodes_json_str).replace("__EDGES_PLACEHOLDER__", edges_json_str)
+
+
 def render_graph(repo: RepoMetadata | None, kind: str) -> None:
     title = "CodeGraph Explorer" if kind == "codegraph" else "Graphify Explorer"
     st.header(title)
@@ -551,59 +905,76 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
             possible_path = repo_root / "graphify-out" / "graph.html"
             if possible_path.exists():
                 html_path = possible_path
-        btn_label = "🪐 Open Interactive Graphify (New Window)"
+        
+        # Add selection toggle for Graphify visualization
+        view_mode = st.radio(
+            "Graph Visualization Mode:",
+            ["🪐 Interactive HTML Graph", "📊 Static Schema (Graphviz)"],
+            horizontal=True,
+            key=f"{repo.repo_id}_graphify_view_mode"
+        )
+    else:
+        view_mode = "📊 Static Schema (Graphviz)"
 
     rendered_interactive = False
-    if html_path:
+    if view_mode == "🪐 Interactive HTML Graph":
         try:
-            with open(html_path, "r", encoding="utf-8") as f:
-                html_content = f.read()
-            import base64
-            import streamlit.components.v1 as components
+            html_content = ""
+            if html_path:
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+            else:
+                # Dynamically generate interactive HTML from the loaded graph document
+                html_content = generate_interactive_graph_html(graph)
             
-            # Embed the vis-network graph directly in Streamlit page
-            components.html(html_content, height=750, scrolling=False)
-            rendered_interactive = True
-            
-            # Show standard action link/button to open in a new tab
-            b64_html = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
-            href = f"data:text/html;base64,{b64_html}"
-            st.markdown(
-                """
-                <style>
-                .open-graph-btn {
-                    display: inline-block;
-                    padding: 0.5rem 1.5rem;
-                    font-family: 'Plus Jakarta Sans', sans-serif;
-                    font-size: 14px;
-                    font-weight: 600;
-                    color: #ffffff !important;
-                    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-                    border: none;
-                    border-radius: 10px;
-                    text-decoration: none;
-                    cursor: pointer;
-                    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-                    transition: all 0.2s ease;
-                    margin-top: 10px;
-                    margin-bottom: 20px;
-                }
-                .open-graph-btn:hover {
-                    background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
-                    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
-                    transform: translateY(-2px);
-                    text-decoration: none;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True
-            )
-            st.markdown(
-                f'<a href="{href}" target="_blank" class="open-graph-btn">{btn_label}</a>',
-                unsafe_allow_html=True
-            )
+            if html_content:
+                import base64
+                import streamlit.components.v1 as components
+                
+                # Embed the vis-network graph directly in Streamlit page
+                components.html(html_content, height=750, scrolling=False)
+                rendered_interactive = True
+                
+                # Show standard action link/button to open in a new tab
+                b64_html = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
+                href = f"data:text/html;base64,{b64_html}"
+                st.markdown(
+                    """
+                    <style>
+                    .open-graph-btn {
+                        display: inline-block;
+                        padding: 0.5rem 1.5rem;
+                        font-family: 'Plus Jakarta Sans', sans-serif;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: #ffffff !important;
+                        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+                        border: none;
+                        border-radius: 10px;
+                        text-decoration: none;
+                        cursor: pointer;
+                        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+                        transition: all 0.2s ease;
+                        margin-top: 10px;
+                        margin-bottom: 20px;
+                    }
+                    .open-graph-btn:hover {
+                        background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+                        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+                        transform: translateY(-2px);
+                        text-decoration: none;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+                st.markdown(
+                    f'<a href="{href}" target="_blank" class="open-graph-btn">🪐 Open Interactive Graphify (New Window)</a>',
+                    unsafe_allow_html=True
+                )
         except Exception as e:
             st.error(f"Error rendering interactive graph HTML: {e}")
+            rendered_interactive = False
 
     if not rendered_interactive:
         st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
