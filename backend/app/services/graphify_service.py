@@ -104,27 +104,86 @@ class GraphifyService:
         # Resolve environment with API keys for Graphify subprocess
         import os
         env = dict(os.environ)
+
+        # 1. Try resolving keys from streamlit secrets first if available
+        try:
+            import streamlit as st
+            for key_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
+                if key_name not in env and key_name in st.secrets:
+                    env[key_name] = st.secrets[key_name]
+                    if hasattr(self.storage, "append_log"):
+                        self.storage.append_log(
+                            repo_id,
+                            "graphify",
+                            "info",
+                            f"Resolved {key_name} from streamlit.secrets"
+                        )
+        except Exception:
+            pass
+
+        # 2. Gather unique search directories to look for .streamlit/secrets.toml or .env files
+        search_dirs = []
+        try:
+            cwd = Path.cwd()
+            search_dirs.append(cwd)
+            search_dirs.extend(cwd.parents)
+        except Exception:
+            pass
+
+        if repo_root:
+            try:
+                search_dirs.append(repo_root)
+                search_dirs.extend(repo_root.parents)
+            except Exception:
+                pass
+
+        # Remove duplicates while preserving order
+        unique_search_dirs = []
+        seen = set()
+        for d in search_dirs:
+            try:
+                resolved = d.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    unique_search_dirs.append(resolved)
+            except Exception:
+                pass
+
+        # 3. Read secrets from files in the candidate directories
         for key_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
             if key_name not in env:
-                for filename in [".streamlit/secrets.toml", ".env"]:
-                    try:
-                        p = Path.cwd() / filename
-                        if not p.exists():
-                            p = repo_root.parents[2] / filename
-                        if p.exists():
-                            content = p.read_text(encoding="utf-8")
-                            match = re.search(rf'{key_name}\s*=\s*["\']?([^"\'\s]+)["\']?', content)
-                            if match:
-                                env[key_name] = match.group(1)
-                                break
-                    except Exception:
-                        pass
+                found = False
+                for d in unique_search_dirs:
+                    for filename in [".streamlit/secrets.toml", ".env"]:
+                        try:
+                            p = d / filename
+                            if p.exists():
+                                content = p.read_text(encoding="utf-8")
+                                match = re.search(rf'{key_name}\s*=\s*["\']?([^"\'\s]+)["\']?', content)
+                                if match:
+                                    env[key_name] = match.group(1)
+                                    if hasattr(self.storage, "append_log"):
+                                        self.storage.append_log(
+                                            repo_id,
+                                            "graphify",
+                                            "info",
+                                            f"Resolved {key_name} from {filename} at {p.parent}"
+                                        )
+                                    found = True
+                                    break
+                        except Exception:
+                            pass
+                    if found:
+                        break
+
+        # Align GEMINI_API_KEY and GOOGLE_API_KEY
         if "GEMINI_API_KEY" in env and "GOOGLE_API_KEY" not in env:
             env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
         elif "GOOGLE_API_KEY" in env and "GEMINI_API_KEY" not in env:
             env["GEMINI_API_KEY"] = env["GOOGLE_API_KEY"]
             
         cli_success = False
+        proc_details = ""
         try:
             # Run graphify . inside repo_root
             proc = subprocess.run(
@@ -138,9 +197,16 @@ class GraphifyService:
             )
             if proc.returncode == 0 and json_path.exists():
                 cli_success = True
+            else:
+                proc_details = (
+                    f"returncode: {proc.returncode}\n"
+                    f"stdout: {proc.stdout or ''}\n"
+                    f"stderr: {proc.stderr or ''}"
+                )
         except Exception as e:
+            proc_details = f"Subprocess exception: {e}"
             if hasattr(self.storage, "append_log"):
-                self.storage.append_log(repo_id, "graphify", "warning", f"Graphify CLI run failed: {e}")
+                self.storage.append_log(repo_id, "graphify", "warning", f"Graphify CLI run failed with exception: {e}")
                 
         if cli_success:
             try:
@@ -202,5 +268,10 @@ class GraphifyService:
         else:
             print("Unable to generate Graphify graph")
             if hasattr(self.storage, "append_log"):
-                self.storage.append_log(repo_id, "graphify", "error", "CLI execution did not succeed.")
-            raise RuntimeError("Unable to generate Graphify graph")
+                self.storage.append_log(
+                    repo_id, 
+                    "graphify", 
+                    "error", 
+                    f"CLI execution did not succeed. Diagnostics:\n{proc_details}"
+                )
+            raise RuntimeError(f"Unable to generate Graphify graph. Diagnostics:\n{proc_details}")
