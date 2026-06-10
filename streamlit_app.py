@@ -288,6 +288,9 @@ def current_repo() -> RepoMetadata | None:
 def set_repo(repo: RepoMetadata) -> None:
     st.session_state.repo_id = repo.repo_id
     st.session_state.selected_file = None
+    # Clear last rectified files on repo change
+    st.session_state.codegraph_last_rectified_file = None
+    st.session_state.graphify_last_rectified_file = None
 
 
 def ingest_uploaded_file(uploaded_file) -> RepoMetadata:
@@ -1137,6 +1140,7 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
             st.warning("Please enter a valid integer for Max Nodes.")
             
     if st.button("Ask CodeGraph QA", disabled=not question.strip(), type="primary"):
+        st.session_state.codegraph_last_rectified_file = None  # Clear old rectified file on new query
         with st.spinner("Querying CodeGraph structure and calling LLM..."):
             started = time.perf_counter()
             try:
@@ -1276,8 +1280,19 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                     )
                     if res["status"] == "success":
                         st.success(res["message"])
-                        # Clear QA states to reset
-                        st.session_state.codegraph_qa_answer = None
+                        
+                        # Save the updated file info for download option
+                        filepath_abs = storage.repo_source_dir(repo.repo_id) / fix["filepath"]
+                        if filepath_abs.exists():
+                            try:
+                                updated_content = filepath_abs.read_text(encoding="utf-8")
+                                st.session_state.codegraph_last_rectified_file = {
+                                    "filename": Path(fix["filepath"]).name,
+                                    "filepath": fix["filepath"],
+                                    "content": updated_content
+                                }
+                            except Exception as e:
+                                st.error(f"Error reading rectified file for download: {e}")
                         st.rerun()
                     else:
                         st.error(res["error"])
@@ -1314,6 +1329,21 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                 with t3:
                     st.markdown("**Exact Prompt Sent to LLM:**")
                     st.text_area("LLM Final Prompt", st.session_state.codegraph_qa_prompt, height=400)
+
+    # Render persistent download button at the bottom of the tab if a file was changed
+    rectified_file = st.session_state.get("codegraph_last_rectified_file")
+    if rectified_file:
+        st.divider()
+        st.subheader("📥 Download Rectified File")
+        st.info(f"The file `{rectified_file['filepath']}` was successfully updated via error rectification.")
+        st.download_button(
+            label=f"Download {rectified_file['filename']}",
+            data=rectified_file["content"],
+            file_name=rectified_file["filename"],
+            mime="text/plain",
+            key="download_codegraph_rectified_file"
+        )
+
 
 
 def render_graphify_qa(repo: RepoMetadata | None) -> None:
@@ -1359,6 +1389,7 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
             st.warning("Please enter a valid integer for the token budget.")
             
     if st.button("Ask Graphify QA", disabled=not question.strip(), type="primary"):
+        st.session_state.graphify_last_rectified_file = None  # Clear old rectified file on new query
         with st.spinner("Executing Graphify query and calling LLM..."):
             started = time.perf_counter()
             q_text = question.strip()
@@ -1700,8 +1731,19 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                     )
                     if res["status"] == "success":
                         st.success(res["message"])
-                        # Clear QA states to reset
-                        st.session_state.graphify_qa_answer = None
+                        
+                        # Save the updated file info for download option
+                        filepath_abs = storage.repo_source_dir(repo.repo_id) / fix["filepath"]
+                        if filepath_abs.exists():
+                            try:
+                                updated_content = filepath_abs.read_text(encoding="utf-8")
+                                st.session_state.graphify_last_rectified_file = {
+                                    "filename": Path(fix["filepath"]).name,
+                                    "filepath": fix["filepath"],
+                                    "content": updated_content
+                                }
+                            except Exception as e:
+                                st.error(f"Error reading rectified file for download: {e}")
                         st.rerun()
                     else:
                         st.error(res["error"])
@@ -1731,6 +1773,21 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                 with t3:
                     st.markdown("**Exact Prompt Sent to LLM:**")
                     st.text_area("LLM Final Prompt", st.session_state.get("graphify_qa_prompt", ""), height=400)
+
+    # Render persistent download button at the bottom of the tab if a file was changed
+    rectified_file = st.session_state.get("graphify_last_rectified_file")
+    if rectified_file:
+        st.divider()
+        st.subheader("📥 Download Rectified File")
+        st.info(f"The file `{rectified_file['filepath']}` was successfully updated via error rectification.")
+        st.download_button(
+            label=f"Download {rectified_file['filename']}",
+            data=rectified_file["content"],
+            file_name=rectified_file["filename"],
+            mime="text/plain",
+            key="download_graphify_rectified_file"
+        )
+
 
 
 def main() -> None:
