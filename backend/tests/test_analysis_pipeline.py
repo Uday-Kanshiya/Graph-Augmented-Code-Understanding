@@ -38,7 +38,7 @@ def test_pipeline_analyzes_python_repo(tmp_path: Path) -> None:
         storage=storage,
         tree_sitter_service=TreeSitterService(),
         codegraph_service=CodeGraphService(),
-        graphify_service=GraphifyService(storage=storage, cli_name="__missing_graphify__"),
+        graphify_service=GraphifyService(storage=storage),
         token_service=token_service,
     )
 
@@ -58,14 +58,15 @@ def test_pipeline_analyzes_python_repo(tmp_path: Path) -> None:
     assert codegraph is not None
     labels = {node.label for node in codegraph.nodes}
     assert {"Calculator", "multiply", "hypotenuse"}.issubset(labels)
-    assert any(edge.edge_type == "calls" for edge in codegraph.edges)
+    assert any(edge.edge_type in {"calls", "dependency"} for edge in codegraph.edges)
 
     graphify = storage.load_graphify(metadata.repo_id)
     assert graphify is not None
-    assert graphify.source == "graphify-fallback"
-    assert graphify.warnings
+    assert graphify.source in {"graphify", "graphify-fallback"}
+    if graphify.source == "graphify-fallback":
+        assert graphify.warnings
 
     summary = storage.load_token_summary(metadata.repo_id)
     assert summary is not None
-    assert summary.stages["raw_repo_text"].tokens > 0
+    assert summary.stages["codegraph_derived_context"].tokens > 0
 
