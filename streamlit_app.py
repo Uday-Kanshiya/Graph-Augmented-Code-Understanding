@@ -523,7 +523,41 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
     cols[0].metric("Source", graph.source)
     cols[1].metric("Nodes", len(graph.nodes))
     cols[2].metric("Edges", len(graph.edges))
-    st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
+    if kind == "graphify":
+        viz_format = st.radio(
+            "Select Graph Visualization Format:",
+            ["Current Graph Type (Graphviz)", "Graphify Format (Interactive HTML)"],
+            horizontal=True,
+            key="graphify_explorer_viz_format"
+        )
+        
+        if viz_format == "Graphify Format (Interactive HTML)":
+            html_path = None
+            repo_root = storage.repo_source_dir(repo.repo_id)
+            if repo_root and repo_root.exists():
+                possible_path = repo_root / "graphify-out" / "graph.html"
+                if possible_path.exists():
+                    html_path = possible_path
+            
+            if not html_path:
+                possible_path = PROJECT_ROOT / "graphify-out" / "graph.html"
+                if possible_path.exists():
+                    html_path = possible_path
+                    
+            if html_path:
+                try:
+                    with open(html_path, "r", encoding="utf-8") as f:
+                        html_content = f.read()
+                    import streamlit.components.v1 as components
+                    components.html(html_content, height=600, scrolling=True)
+                except Exception as e:
+                    st.error(f"Error reading Graphify HTML: {e}")
+            else:
+                st.warning("Graphify HTML file not found.")
+        else:
+            st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
+    else:
+        st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
     with st.expander("Nodes"):
         st.dataframe([node.model_dump() for node in graph.nodes], use_container_width=True, hide_index=True)
     with st.expander("Edges"):
@@ -1157,44 +1191,6 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                 with t3:
                     st.markdown("**Exact Prompt Sent to LLM:**")
                     st.text_area("LLM Final Prompt", st.session_state.get("graphify_qa_prompt", ""), height=400)
-
-    st.divider()
-    st.subheader("🗺️ Graph Visualization")
-    
-    show_viz = st.checkbox("Show Graph Visualization", value=False, key="graphify_qa_show_viz")
-    if show_viz:
-        viz_format = st.radio(
-            "Select Graph Visualization Format:",
-            ["Current Graph Type (Graphviz)", "Graphify Format (Interactive HTML)"],
-            horizontal=True,
-            key="graphify_qa_viz_format"
-        )
-        
-        if viz_format == "Graphify Format (Interactive HTML)":
-            html_path = None
-            repo_root = storage.repo_source_dir(repo.repo_id)
-            if repo_root and repo_root.exists():
-                possible_path = repo_root / "graphify-out" / "graph.html"
-                if possible_path.exists():
-                    html_path = possible_path
-            
-            if not html_path:
-                possible_path = PROJECT_ROOT / "graphify-out" / "graph.html"
-                if possible_path.exists():
-                    html_path = possible_path
-                    
-            if html_path:
-                try:
-                    with open(html_path, "r", encoding="utf-8") as f:
-                        html_content = f.read()
-                    import streamlit.components.v1 as components
-                    components.html(html_content, height=600, scrolling=True)
-                except Exception as e:
-                    st.error(f"Error reading Graphify HTML: {e}")
-            else:
-                st.warning("Graphify HTML file not found.")
-        else:
-            st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
 
 
 def main() -> None:
