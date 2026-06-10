@@ -356,11 +356,30 @@ def render_upload_import(repo: RepoMetadata | None) -> None:
     if repo:
         st.divider()
         st.subheader("Repository Summary")
+        
+        files = storage.load_files(repo.repo_id)
+        from collections import Counter
+        lang_counter = Counter()
+        lang_lines = {}
+        if files:
+            for file in files:
+                lang = file.language or "unknown"
+                lang_counter[lang] += 1
+                lang_lines[lang] = lang_lines.get(lang, 0) + file.line_count
+                
+        if lang_counter:
+            top_lang, top_count = lang_counter.most_common(1)[0]
+            top_lines = lang_lines.get(top_lang, 0)
+        else:
+            top_lang = "None"
+            top_count = 0
+            top_lines = 0
+
         cols = st.columns(4)
         cols[0].metric("Total files", repo.stats.total_files)
-        cols[1].metric("Python files", repo.stats.python_files)
+        cols[1].metric("Top Language (Files)", f"{top_lang.capitalize()} ({top_count})")
         cols[2].metric("Total lines", repo.stats.total_lines)
-        cols[3].metric("Python lines", repo.stats.python_lines)
+        cols[3].metric(f"{top_lang.capitalize()} lines", f"{top_lines:,}")
         st.write(f"**Origin:** `{repo.origin}`")
         if repo.error:
             st.error(repo.error)
