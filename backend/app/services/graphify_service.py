@@ -183,10 +183,22 @@ class GraphifyService:
         elif "GOOGLE_API_KEY" in env and "GEMINI_API_KEY" not in env:
             env["GEMINI_API_KEY"] = env["GOOGLE_API_KEY"]
             
+        # Create a dummy .git folder inside repo_root to act as a VCS ceiling for Graphify,
+        # preventing it from walking up to the project's root VCS and ignoring files
+        # due to gitignore rules (e.g. data/repos/* in the project's .gitignore).
+        dummy_git = repo_root / ".git"
+        created_dummy_git = False
+        if not dummy_git.exists():
+            try:
+                dummy_git.mkdir(exist_ok=True)
+                created_dummy_git = True
+            except Exception:
+                pass
+
         cli_success = False
         proc_details = ""
         try:
-            # Run graphify . inside repo_root using sys.executable to bypass shell PATH resolution errors
+            # Run graphify . inside repo_root using sys.executable
             cmd = f'"{sys.executable}" -m graphify .'
             proc = subprocess.run(
                 cmd,
@@ -209,6 +221,12 @@ class GraphifyService:
             proc_details = f"Subprocess exception: {e}"
             if hasattr(self.storage, "append_log"):
                 self.storage.append_log(repo_id, "graphify", "warning", f"Graphify CLI run failed with exception: {e}")
+        finally:
+            if created_dummy_git and dummy_git.exists():
+                try:
+                    dummy_git.rmdir()
+                except Exception:
+                    pass
                 
         if cli_success:
             try:
