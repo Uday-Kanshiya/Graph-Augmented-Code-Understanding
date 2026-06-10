@@ -51,12 +51,22 @@ class GeminiProvider(LLMProvider):
 
     def generate_answer(self, prompt: str) -> LLMResponse:
         prompt_tokens = self.count_tokens(prompt, "llm_prompt_tokens")
-        try:
-            response = self.client.models.generate_content(model=self.model, contents=prompt)
-        except LLMConfigurationError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Gemini generation failed: {exc}") from exc
+        
+        import time
+        max_retries = 4
+        backoff = 2.0
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(model=self.model, contents=prompt)
+                break
+            except LLMConfigurationError:
+                raise
+            except Exception as exc:
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Gemini generation failed after {max_retries} attempts: {exc}") from exc
+                time.sleep(backoff)
+                backoff *= 2.0
 
         text = getattr(response, "text", "") or ""
         usage = getattr(response, "usage_metadata", None)

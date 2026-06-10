@@ -271,6 +271,21 @@ def services():
         llm_provider=llm_provider,
         pipeline=pipeline,
     )
+    if not hasattr(ChatService, "get_rectify_instructions"):
+        ChatService.get_rectify_instructions = lambda self: (
+            "\n\nIMPORTANT: If you identify any bug/error and propose a code change, you MUST wrap the proposed fix exactly in "
+            "the following XML structure so the system can apply it automatically:\n"
+            "<code_fix>\n"
+            "  <filepath>relative/path/to/file.py</filepath>\n"
+            "  <original_code>\n"
+            "// Exact block of old code to replace (must match precisely including spacing)\n"
+            "  </original_code>\n"
+            "  <replacement_code>\n"
+            "// Exact block of new code to insert\n"
+            "  </replacement_code>\n"
+            "</code_fix>\n"
+            "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
+        )
 
     return storage, pipeline, repo_service, chat_service, llm_provider
 
