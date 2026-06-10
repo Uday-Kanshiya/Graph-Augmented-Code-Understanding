@@ -447,10 +447,7 @@ def render_graph_schematic(kind: str) -> None:
                 | **`function`** / **`method`** | Independent utility functions or class-bound methods. | `signature`, parameters, return type, docstrings, `source_snippet` | Holds the exact business logic and code execution body. |
                 """
             )
-            st.info(
-                "💡 **How it saves tokens:** Instead of sending the full file, if a function is not matching the query, "
-                "we only extract its **light signature** (signature + docstring header) in neighborhood traversal."
-            )
+
         with t2:
             st.markdown(
                 """
@@ -473,10 +470,7 @@ def render_graph_schematic(kind: str) -> None:
                 | **`component`** | A macro-level class or concept design boundary. | Design role, interaction count, encapsulation level | Identifies core concepts and system boundaries. |
                 """
             )
-            st.info(
-                "💡 **How it saves tokens:** Graphify **prunes all micro-nodes** (helper functions/methods) "
-                "to keep the context focused on high-level system-level interactions and architecture."
-            )
+
         with t2:
             st.markdown(
                 """
@@ -556,10 +550,6 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
         repo_root = storage.repo_source_dir(repo.repo_id)
         if repo_root and repo_root.exists():
             possible_path = repo_root / "graphify-out" / "graph.html"
-            if possible_path.exists():
-                html_path = possible_path
-        if not html_path:
-            possible_path = PROJECT_ROOT / "graphify-out" / "graph.html"
             if possible_path.exists():
                 html_path = possible_path
         btn_label = "🪐 Open Interactive Graphify"
