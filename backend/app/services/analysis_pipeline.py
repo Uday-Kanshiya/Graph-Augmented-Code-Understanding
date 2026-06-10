@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from app.models.schemas import RepoMetadata, RepoStatus, RepoStats
 from app.services.codegraph_service import CodeGraphService
-from app.services.file_utils import is_ignored, iter_python_files, read_text_lossy
+from app.services.file_utils import is_ignored, iter_python_files, read_text_lossy, is_binary_file
 from app.services.graphify_service import GraphifyService
 from app.services.storage import LocalStorage
 from app.services.token_service import TokenService
@@ -40,7 +40,7 @@ class AnalysisPipeline:
             metadata.stats = stats
             if not files:
                 metadata.status = RepoStatus.failed
-                metadata.error = "No supported code files found. The engine supports Python, JavaScript/TypeScript, Go, Rust, Java, and C/C++ repositories."
+                metadata.error = "No supported code files found. The engine supports any text-based coding repository."
                 self.storage.save_repo_metadata(metadata)
                 self.storage.append_log(repo_id, "ingestion", "error", metadata.error)
                 return metadata
@@ -112,8 +112,11 @@ class AnalysisPipeline:
                 if is_ignored(rel):
                     continue
                 total_files += 1
-                if path.suffix in {".py", ".pyi", ".txt", ".md", ".toml", ".yaml", ".yml", ".json"}:
-                    total_lines += len(read_text_lossy(path).splitlines())
+                if not is_binary_file(path):
+                    try:
+                        total_lines += len(read_text_lossy(path).splitlines())
+                    except Exception:
+                        pass
         python_lines = sum(file.line_count for file in files)
         return RepoStats(
             total_files=total_files,

@@ -70,6 +70,39 @@ EXTENSION_TO_LANGUAGE = {
     ".hpp": "cpp",
 }
 
+BINARY_EXTENSIONS = {
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".tiff", ".webp", ".psd", ".ai",
+    # Audio/Video
+    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".webm",
+    # Archives / Compressed
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz",
+    # Executables / Binaries
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".lib", ".out", ".app", ".sys",
+    # Databases
+    ".db", ".sqlite", ".sqlite3", ".sqlitedb",
+    # Office documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # Fonts
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    # Misc/Java/Python
+    ".class", ".jar", ".war", ".ear", ".pyc", ".pyo", ".pyd",
+}
+
+
+def is_binary_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in BINARY_EXTENSIONS:
+        return True
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(8192)
+            if b"\x00" in chunk:
+                return True
+    except Exception:
+        return True
+    return False
+
 
 def iter_code_files(root: Path) -> list[RepoFile]:
     files: list[RepoFile] = []
@@ -79,10 +112,20 @@ def iter_code_files(root: Path) -> list[RepoFile]:
         rel = path.relative_to(root)
         if is_ignored(rel):
             continue
+        if is_binary_file(path):
+            continue
+        
         suffix = path.suffix.lower()
         if suffix in EXTENSION_TO_LANGUAGE:
-            text = read_text_lossy(path)
             language = EXTENSION_TO_LANGUAGE[suffix]
+        else:
+            # Map dynamic suffix or default to text
+            language = suffix.lstrip(".") if suffix else "text"
+            if not language.isalnum():
+                language = "text"
+                
+        try:
+            text = read_text_lossy(path)
             files.append(
                 RepoFile(
                     path=rel.as_posix(),
@@ -91,6 +134,8 @@ def iter_code_files(root: Path) -> list[RepoFile]:
                     line_count=len(text.splitlines()),
                 )
             )
+        except Exception:
+            continue
     return files
 
 

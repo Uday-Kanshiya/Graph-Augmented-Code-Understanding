@@ -341,8 +341,8 @@ def render_upload_import(repo: RepoMetadata | None) -> None:
                     st.error(str(exc))
 
     st.caption(
-        "Supported languages: Python, JavaScript/TypeScript, Go, Rust, Java, and C/C++. "
-        "The app automatically skips .git, virtual environments (.venv), node_modules, build outputs, and caches."
+        "Supported languages: Python, JavaScript/TypeScript, Go, Rust, Java, C/C++, HTML, CSS, Shell, and other text-based languages. "
+        "The app automatically skips .git, virtual environments (.venv), node_modules, build outputs, caches, and binary files."
     )
 
     if repo:
@@ -686,6 +686,25 @@ def render_tokens(repo: RepoMetadata | None) -> None:
 
 
 
+def parse_code_fix(text: str) -> dict | None:
+    match = re.search(r"<code_fix>(.*?)</code_fix>", text, re.DOTALL)
+    if not match:
+        return None
+    content = match.group(1)
+    
+    fp_match = re.search(r"<filepath>(.*?)</filepath>", content, re.DOTALL)
+    orig_match = re.search(r"<original_code>(.*?)</original_code>", content, re.DOTALL)
+    repl_match = re.search(r"<replacement_code>(.*?)</replacement_code>", content, re.DOTALL)
+    
+    if fp_match and orig_match and repl_match:
+        return {
+            "filepath": fp_match.group(1).strip(),
+            "original_code": orig_match.group(1),
+            "replacement_code": repl_match.group(1),
+        }
+    return None
+
+
 def render_codegraph_qa(repo: RepoMetadata | None) -> None:
     st.header("CodeGraph QA")
     if not repo:
@@ -710,6 +729,12 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
             value="8",
             help="Limits context details sent to the LLM. Larger number provides more files but uses more tokens."
         )
+        rectify_checked = st.checkbox(
+            "Enable Error Rectification",
+            value=False,
+            key="codegraph_qa_rectify",
+            help="If enabled, the LLM will check for errors and suggest a code fix."
+        )
         
     max_nodes_val = 8
     if max_nodes_input.strip():
@@ -731,7 +756,7 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                 )
                 
                 # 2. Get LLM Prompt
-                prompt = chat_service._graph_prompt(question.strip(), graph_context.context, rectify=False)
+                prompt = chat_service._graph_prompt(question.strip(), graph_context.context, rectify=rectify_checked)
                 
                 # 3. Call LLM
                 response = llm_provider.generate_answer(prompt)
@@ -818,6 +843,39 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                 
         st.subheader("💡 Answer")
         st.markdown(st.session_state.codegraph_qa_answer)
+
+        # Check for error rectification code fix
+        fix = parse_code_fix(st.session_state.codegraph_qa_answer)
+        if fix:
+            st.divider()
+            st.subheader("🛠️ Proposed Error Rectification")
+            st.markdown(f"**Target File:** `{fix['filepath']}`")
+            
+            # Show original and replacement
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Original Code:**")
+                st.code(fix["original_code"])
+            with col2:
+                st.markdown("**Proposed Replacement:**")
+                st.code(fix["replacement_code"])
+                
+            # Render apply button
+            if st.button("Apply Suggested Fix", key="apply_codegraph_fix_btn", type="primary"):
+                with st.spinner("Applying fix and re-analyzing codebase..."):
+                    res = chat_service.apply_rectification(
+                        repo.repo_id,
+                        fix["filepath"],
+                        fix["original_code"],
+                        fix["replacement_code"]
+                    )
+                    if res["status"] == "success":
+                        st.success(res["message"])
+                        # Clear QA states to reset
+                        st.session_state.codegraph_qa_answer = None
+                        st.rerun()
+                    else:
+                        st.error(res["error"])
         
         with st.expander("🔬 Retrieved Subgraph Details and Raw LLM Prompt", expanded=False):
             is_cli = any(sn.file_path == "codegraph:cli" for sn in st.session_state.codegraph_qa_snippets)
@@ -881,6 +939,12 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
             placeholder="e.g. 2000",
             help="Limits context details sent to the LLM. If empty, no limit is applied."
         )
+        rectify_checked = st.checkbox(
+            "Enable Error Rectification",
+            value=False,
+            key="graphify_qa_rectify",
+            help="If enabled, the LLM will check for errors and suggest a code fix."
+        )
         
     token_budget_val = None
     if token_budget_input.strip():
@@ -926,11 +990,13 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                             output = output[:char_budget] + f'\n... (truncated at ~{token_budget_val} token budget - use --budget N for more)'
                             budget_exceeded = True
                             
+                    rectify_str = chat_service.get_rectify_instructions() if rectify_checked else ""
                     prompt = (
                         "You are a graph-aware repository QA assistant. Use the following Graphify output to answer the question.\n"
                         "Answer using ONLY what the graph context contains.\n\n"
                         f"Question: {q_text}\n\n"
                         f"Graph Context:\n{output}"
+                        f"{rectify_str}"
                     )
                     
                     response = llm_provider.generate_answer(prompt)
@@ -1075,12 +1141,14 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                                 output = output[:char_budget] + f'\n... (truncated at ~{token_budget_val} token budget - use --budget N for more)'
                                 budget_exceeded = True
                                 
+                        rectify_str = chat_service.get_rectify_instructions() if rectify_checked else ""
                         prompt = (
                             "You are a graph-aware repository QA assistant. Use the following Graphify nodes and relationships to answer the question.\n"
                             "Cite files and lines when they are available in the node details. Answer using ONLY what the graph contains. Quote source locations when citing specific facts.\n"
                             "If the graph lacks enough information to answer, say so - do not hallucinate edges or facts.\n\n"
                             f"Question: {q_text}\n\n"
                             f"Graph Context:\n{output}"
+                            f"{rectify_str}"
                         )
                         
                         response = llm_provider.generate_answer(prompt)
@@ -1192,6 +1260,39 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
             
         st.subheader("💡 Answer")
         st.markdown(st.session_state.graphify_qa_answer)
+        
+        # Check for error rectification code fix
+        fix = parse_code_fix(st.session_state.graphify_qa_answer)
+        if fix:
+            st.divider()
+            st.subheader("🛠️ Proposed Error Rectification")
+            st.markdown(f"**Target File:** `{fix['filepath']}`")
+            
+            # Show original and replacement
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Original Code:**")
+                st.code(fix["original_code"])
+            with col2:
+                st.markdown("**Proposed Replacement:**")
+                st.code(fix["replacement_code"])
+                
+            # Render apply button
+            if st.button("Apply Suggested Fix", key="apply_graphify_fix_btn", type="primary"):
+                with st.spinner("Applying fix and re-analyzing codebase..."):
+                    res = chat_service.apply_rectification(
+                        repo.repo_id,
+                        fix["filepath"],
+                        fix["original_code"],
+                        fix["replacement_code"]
+                    )
+                    if res["status"] == "success":
+                        st.success(res["message"])
+                        # Clear QA states to reset
+                        st.session_state.graphify_qa_answer = None
+                        st.rerun()
+                    else:
+                        st.error(res["error"])
         
         with st.expander("🔬 Retrieved Subgraph Details and Raw LLM Prompt", expanded=False):
             if st.session_state.get("graphify_qa_using_cli"):

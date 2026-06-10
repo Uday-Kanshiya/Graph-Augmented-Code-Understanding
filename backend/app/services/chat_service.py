@@ -198,23 +198,24 @@ class ChatService:
         except LLMConfigurationError as exc:
             return self.token_service.measure_estimated("llm_prompt_tokens", prompt, notes=str(exc))
 
+    def get_rectify_instructions(self) -> str:
+        return (
+            "\n\nIMPORTANT: If you identify any bug/error and propose a code change, you MUST wrap the proposed fix exactly in "
+            "the following XML structure so the system can apply it automatically:\n"
+            "<code_fix>\n"
+            "  <filepath>relative/path/to/file.py</filepath>\n"
+            "  <original_code>\n"
+            "// Exact block of old code to replace (must match precisely including spacing)\n"
+            "  </original_code>\n"
+            "  <replacement_code>\n"
+            "// Exact block of new code to insert\n"
+            "  </replacement_code>\n"
+            "</code_fix>\n"
+            "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
+        )
+
     def _standard_prompt(self, query: str, context: str, rectify: bool = False) -> str:
-        rectify_str = ""
-        if rectify:
-            rectify_str = (
-                "\n\nIMPORTANT: If you identify any bug/error and propose a code change, you MUST wrap the proposed fix exactly in "
-                "the following XML structure so the system can apply it automatically:\n"
-                "<code_fix>\n"
-                "  <filepath>relative/path/to/file.py</filepath>\n"
-                "  <original_code>\n"
-                "// Exact block of old code to replace (must match precisely including spacing)\n"
-                "  </original_code>\n"
-                "  <replacement_code>\n"
-                "// Exact block of new code to insert\n"
-                "  </replacement_code>\n"
-                "</code_fix>\n"
-                "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
-            )
+        rectify_str = self.get_rectify_instructions() if rectify else ""
         return (
             "You are a repository QA assistant. Answer only from the provided source context. "
             "Cite file paths and line ranges when possible. If the context is insufficient, say so. "
@@ -225,22 +226,7 @@ class ChatService:
         )
 
     def _graph_prompt(self, query: str, context: str, rectify: bool = False) -> str:
-        rectify_str = ""
-        if rectify:
-            rectify_str = (
-                "\n\nIMPORTANT: If you identify any bug/error and propose a code change, you MUST wrap the proposed fix exactly in "
-                "the following XML structure so the system can apply it automatically:\n"
-                "<code_fix>\n"
-                "  <filepath>relative/path/to/file.py</filepath>\n"
-                "  <original_code>\n"
-                "// Exact block of old code to replace (must match precisely including spacing)\n"
-                "  </original_code>\n"
-                "  <replacement_code>\n"
-                "// Exact block of new code to insert\n"
-                "  </replacement_code>\n"
-                "</code_fix>\n"
-                "Make sure that the <original_code> block you target matches the codebase content exactly, character-for-character."
-            )
+        rectify_str = self.get_rectify_instructions() if rectify else ""
             
         import re
         is_codegraph = "codegraph" in context.lower()
