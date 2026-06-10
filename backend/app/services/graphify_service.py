@@ -101,6 +101,29 @@ class GraphifyService:
             except Exception:
                 pass
                 
+        # Resolve environment with API keys for Graphify subprocess
+        import os
+        env = dict(os.environ)
+        for key_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
+            if key_name not in env:
+                for filename in [".streamlit/secrets.toml", ".env"]:
+                    try:
+                        p = Path.cwd() / filename
+                        if not p.exists():
+                            p = repo_root.parents[2] / filename
+                        if p.exists():
+                            content = p.read_text(encoding="utf-8")
+                            match = re.search(rf'{key_name}\s*=\s*["\']?([^"\'\s]+)["\']?', content)
+                            if match:
+                                env[key_name] = match.group(1)
+                                break
+                    except Exception:
+                        pass
+        if "GEMINI_API_KEY" in env and "GOOGLE_API_KEY" not in env:
+            env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
+        elif "GOOGLE_API_KEY" in env and "GEMINI_API_KEY" not in env:
+            env["GEMINI_API_KEY"] = env["GOOGLE_API_KEY"]
+            
         cli_success = False
         try:
             # Run graphify . inside repo_root
@@ -110,6 +133,7 @@ class GraphifyService:
                 capture_output=True,
                 text=True,
                 shell=True,
+                env=env,
                 timeout=120
             )
             if proc.returncode == 0 and json_path.exists():

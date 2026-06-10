@@ -543,7 +543,6 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
     cols[0].metric("Source", graph.source)
     cols[1].metric("Nodes", len(graph.nodes))
     cols[2].metric("Edges", len(graph.edges))
-    st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
 
     html_path = None
     if kind == "graphify":
@@ -552,16 +551,23 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
             possible_path = repo_root / "graphify-out" / "graph.html"
             if possible_path.exists():
                 html_path = possible_path
-        btn_label = "🪐 Open Interactive Graphify"
+        btn_label = "🪐 Open Interactive Graphify (New Window)"
 
+    rendered_interactive = False
     if html_path:
         try:
             with open(html_path, "r", encoding="utf-8") as f:
                 html_content = f.read()
             import base64
+            import streamlit.components.v1 as components
+            
+            # Embed the vis-network graph directly in Streamlit page
+            components.html(html_content, height=750, scrolling=False)
+            rendered_interactive = True
+            
+            # Show standard action link/button to open in a new tab
             b64_html = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
             href = f"data:text/html;base64,{b64_html}"
-            
             st.markdown(
                 """
                 <style>
@@ -579,6 +585,7 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
                     cursor: pointer;
                     box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
                     transition: all 0.2s ease;
+                    margin-top: 10px;
                     margin-bottom: 20px;
                 }
                 .open-graph-btn:hover {
@@ -596,7 +603,10 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
                 unsafe_allow_html=True
             )
         except Exception as e:
-            st.error(f"Error reading graph HTML file: {e}")
+            st.error(f"Error rendering interactive graph HTML: {e}")
+
+    if not rendered_interactive:
+        st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
     with st.expander("Nodes"):
         st.dataframe([node.model_dump() for node in graph.nodes], use_container_width=True, hide_index=True)
     with st.expander("Edges"):
