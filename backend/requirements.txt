@@ -10,3 +10,4 @@ tiktoken
 google-genai
 httpx
 pytest
+graphifyy==0.8.14

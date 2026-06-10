@@ -5,7 +5,8 @@ pydantic-settings
 python-multipart
 tree-sitter
 tree-sitter-python
-networkx
+networkx==3.3
+graphifyy==0.8.14
 tiktoken
 google-genai
 httpx
