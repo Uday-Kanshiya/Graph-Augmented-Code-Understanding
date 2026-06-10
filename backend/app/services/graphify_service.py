@@ -105,7 +105,7 @@ class GraphifyService:
         try:
             # Run graphify . inside repo_root
             proc = subprocess.run(
-                ["graphify", "."],
+                "graphify .",
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,

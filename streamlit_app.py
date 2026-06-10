@@ -795,6 +795,18 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                     notes="Prompt tokens required if sending 100% of codebase files directly to LLM."
                 )
                 
+                # Convert objects to dicts to avoid cross-module Pydantic model conflicts
+                source_snippets_dicts = [sn.model_dump() if hasattr(sn, "model_dump") else sn for sn in graph_context.snippets]
+                selected_nodes_dicts = [n.model_dump() if hasattr(n, "model_dump") else n for n in graph_context.selected_nodes]
+                selected_edges_dicts = [e.model_dump() if hasattr(e, "model_dump") else e for e in graph_context.selected_edges]
+                
+                token_usage_dicts = {}
+                for k, v in token_usage.items():
+                    if hasattr(v, "model_dump"):
+                        token_usage_dicts[k] = v.model_dump()
+                    else:
+                        token_usage_dicts[k] = v
+                
                 record = QueryRecord(
                     query_id=uuid4().hex,
                     repo_id=repo.repo_id,
@@ -804,10 +816,10 @@ def render_codegraph_qa(repo: RepoMetadata | None) -> None:
                     status="completed",
                     answer=response.text,
                     error=None,
-                    source_snippets=graph_context.snippets,
-                    selected_nodes=graph_context.selected_nodes,
-                    selected_edges=graph_context.selected_edges,
-                    token_usage=token_usage,
+                    source_snippets=source_snippets_dicts,
+                    selected_nodes=selected_nodes_dicts,
+                    selected_edges=selected_edges_dicts,
+                    token_usage=token_usage_dicts,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                 )
                 storage.save_query(record)
@@ -1225,6 +1237,13 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                             notes="Raw Input token usage baseline"
                         )
                     }
+                    token_usage_dicts = {}
+                    for k, v in token_usage.items():
+                        if hasattr(v, "model_dump"):
+                            token_usage_dicts[k] = v.model_dump()
+                        else:
+                            token_usage_dicts[k] = v
+                            
                     record = QueryRecord(
                         query_id=uuid4().hex,
                         repo_id=repo.repo_id,
@@ -1237,7 +1256,7 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                         source_snippets=[],
                         selected_nodes=[],
                         selected_edges=[],
-                        token_usage=token_usage,
+                        token_usage=token_usage_dicts,
                         latency_ms=int((time.perf_counter() - started) * 1000),
                     )
                     storage.save_query(record)
