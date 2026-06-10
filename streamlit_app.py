@@ -4,8 +4,7 @@ import os
 import shutil
 import sys
 import re
-import difflib
-import hashlib
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
