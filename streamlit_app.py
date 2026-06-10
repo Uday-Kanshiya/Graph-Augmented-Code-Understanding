@@ -290,16 +290,24 @@ def set_repo(repo: RepoMetadata) -> None:
     st.session_state.selected_file = None
 
 
-def ingest_uploaded_zip(uploaded_file) -> RepoMetadata:
+def ingest_uploaded_file(uploaded_file) -> RepoMetadata:
     repo_id = uuid4().hex
     repo_name = clean_repo_name(Path(uploaded_file.name).stem)
-    upload_path = storage.uploads_dir / f"{repo_id}.zip"
     source_dir = storage.repo_source_dir(repo_id)
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_bytes(uploaded_file.getbuffer())
     if source_dir.exists():
         shutil.rmtree(source_dir)
-    safe_extract_zip(upload_path, source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    
+    if uploaded_file.name.lower().endswith(".zip"):
+        upload_path = storage.uploads_dir / f"{repo_id}.zip"
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(uploaded_file.getbuffer())
+        safe_extract_zip(upload_path, source_dir)
+    else:
+        # Single code/programming file upload
+        file_path = source_dir / uploaded_file.name
+        file_path.write_bytes(uploaded_file.getbuffer())
+        
     return pipeline.analyze_existing(name=repo_name, source_dir=source_dir, origin="upload", repo_id=repo_id)
 
 
@@ -315,12 +323,12 @@ def render_upload_import(repo: RepoMetadata | None) -> None:
     st.header("Upload Or Import")
     left, right = st.columns(2)
     with left:
-        st.subheader("Upload zipped codebase")
-        uploaded_file = st.file_uploader("Choose .zip file", type=["zip"])
+        st.subheader("Upload zipped codebase or single file")
+        uploaded_file = st.file_uploader("Choose .zip or coding file")
         if st.button("Analyze upload", disabled=uploaded_file is None, type="primary"):
-            with st.spinner("Extracting and analyzing repository..."):
+            with st.spinner("Analyzing uploaded files..."):
                 try:
-                    repo = ingest_uploaded_zip(uploaded_file)
+                    repo = ingest_uploaded_file(uploaded_file)
                     set_repo(repo)
                     st.success(f"Loaded {repo.name}")
                     st.rerun()
@@ -536,11 +544,6 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
             if possible_path.exists():
                 html_path = possible_path
         btn_label = "🪐 Open Interactive Graphify"
-    else: # codegraph
-        possible_path = PROJECT_ROOT / "codegraph.html"
-        if possible_path.exists():
-            html_path = possible_path
-        btn_label = "🪐 Open Interactive CodeGraph"
 
     if html_path:
         try:
