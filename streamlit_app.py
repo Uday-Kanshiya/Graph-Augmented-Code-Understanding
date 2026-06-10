@@ -363,9 +363,13 @@ def render_upload_import(repo: RepoMetadata | None) -> None:
         if files:
             st.subheader("Files by Language")
             
-            # Create a list of file data with path and language
+            # Create a list of file data with path, language and lines
             file_data = [
-                {"File": file.path, "Language": file.language or "unknown"}
+                {
+                    "File": file.path, 
+                    "Language": file.language or "unknown",
+                    "Lines": file.line_count
+                }
                 for file in files
             ]
             
@@ -515,26 +519,15 @@ def render_graph(repo: RepoMetadata | None, kind: str) -> None:
         st.info(
             "Native Graphify output is not available in this environment. This tab is showing the saved Graphify adapter output plus a clearly labeled fallback graph derived from CodeGraph."
         )
-    cols = st.columns(4)
+    cols = st.columns(3)
     cols[0].metric("Source", graph.source)
     cols[1].metric("Nodes", len(graph.nodes))
     cols[2].metric("Edges", len(graph.edges))
-    cols[3].metric("Raw output", "saved" if graph.raw_output_path else "none")
     st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
     with st.expander("Nodes"):
         st.dataframe([node.model_dump() for node in graph.nodes], use_container_width=True, hide_index=True)
     with st.expander("Edges"):
         st.dataframe([edge.model_dump() for edge in graph.edges], use_container_width=True, hide_index=True)
-    if kind == "graphify" and graph.raw_output_path:
-        with st.expander("Raw Graphify adapter output"):
-            raw_path = Path(graph.raw_output_path)
-            if raw_path.exists():
-                raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
-                st.code(raw_text[:16000], language="json")
-                if len(raw_text) > 16000:
-                    st.caption("Raw output truncated for display.")
-            else:
-                st.caption(f"Raw output path recorded but not found on disk: {graph.raw_output_path}")
 
     # Render semantic schema explanation view
     render_graph_schematic(kind)
@@ -1164,6 +1157,44 @@ def render_graphify_qa(repo: RepoMetadata | None) -> None:
                 with t3:
                     st.markdown("**Exact Prompt Sent to LLM:**")
                     st.text_area("LLM Final Prompt", st.session_state.get("graphify_qa_prompt", ""), height=400)
+
+    st.divider()
+    st.subheader("🗺️ Graph Visualization")
+    
+    show_viz = st.checkbox("Show Graph Visualization", value=False, key="graphify_qa_show_viz")
+    if show_viz:
+        viz_format = st.radio(
+            "Select Graph Visualization Format:",
+            ["Current Graph Type (Graphviz)", "Graphify Format (Interactive HTML)"],
+            horizontal=True,
+            key="graphify_qa_viz_format"
+        )
+        
+        if viz_format == "Graphify Format (Interactive HTML)":
+            html_path = None
+            repo_root = storage.repo_source_dir(repo.repo_id)
+            if repo_root and repo_root.exists():
+                possible_path = repo_root / "graphify-out" / "graph.html"
+                if possible_path.exists():
+                    html_path = possible_path
+            
+            if not html_path:
+                possible_path = PROJECT_ROOT / "graphify-out" / "graph.html"
+                if possible_path.exists():
+                    html_path = possible_path
+                    
+            if html_path:
+                try:
+                    with open(html_path, "r", encoding="utf-8") as f:
+                        html_content = f.read()
+                    import streamlit.components.v1 as components
+                    components.html(html_content, height=600, scrolling=True)
+                except Exception as e:
+                    st.error(f"Error reading Graphify HTML: {e}")
+            else:
+                st.warning("Graphify HTML file not found.")
+        else:
+            st.graphviz_chart(graph_to_dot(graph), use_container_width=True)
 
 
 def main() -> None:
